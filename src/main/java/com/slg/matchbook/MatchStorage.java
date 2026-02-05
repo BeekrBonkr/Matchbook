@@ -22,7 +22,7 @@ public final class MatchStorage {
         SimpleDateFormat fmt = new SimpleDateFormat("MM-dd-yyyy");
         String day = fmt.format(when);
 
-        File base = new File(plugin.getDataFolder(), "matches");
+        new File(((MatchbookPlugin) plugin).getAddonDataFolder(), "matches")
         File folder = new File(base, day);
         if (!folder.exists() && !folder.mkdirs()) {
             plugin.getLogger().warning("Failed to create folder: " + folder.getAbsolutePath());

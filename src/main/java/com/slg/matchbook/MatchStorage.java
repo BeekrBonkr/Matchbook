@@ -14,7 +14,9 @@ public final class MatchStorage {
 
     private final JavaPlugin plugin;
 
-    public MatchStorage(JavaPlugin plugin) {
+    private final MatchbookPlugin plugin;
+
+    public MatchStorage(MatchbookPlugin plugin) {
         this.plugin = plugin;
     }
 

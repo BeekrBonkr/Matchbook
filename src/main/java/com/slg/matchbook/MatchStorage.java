@@ -1,7 +1,7 @@
 package com.slg.matchbook;
 
+import de.marcely.bedwars.api.arena.Team;
 import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
 import java.io.IOException;
@@ -11,8 +11,6 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 
 public final class MatchStorage {
-
-    private final JavaPlugin plugin;
 
     private final MatchbookPlugin plugin;
 
@@ -24,8 +22,9 @@ public final class MatchStorage {
         SimpleDateFormat fmt = new SimpleDateFormat("MM-dd-yyyy");
         String day = fmt.format(when);
 
-        new File(((MatchbookPlugin) plugin).getAddonDataFolder(), "matches")
+        File base = new File(plugin.getAddonDataFolder(), "matches");
         File folder = new File(base, day);
+
         if (!folder.exists() && !folder.mkdirs()) {
             plugin.getLogger().warning("Failed to create folder: " + folder.getAbsolutePath());
         }
@@ -33,22 +32,18 @@ public final class MatchStorage {
     }
 
     /**
-     * Filename:   <startUnix>-<md5(arenaName)>.yml
-     * match_id:   last4(startUnix) + "-" + first4(md5 from filename)
+     * Filename: <startUnix>-<md5(arenaName)>.yml
+     * match_id: last4(startUnix) + "-" + first4(md5 used in filename)
      */
     public void saveMatchYaml(MatchSession session, String result) {
         long endUnix = session.endUnix != null ? session.endUnix : (System.currentTimeMillis() / 1000L);
 
         File dayFolder = getDayFolder(new Date(session.startUnix * 1000L));
 
-        // md5 based ONLY on arena name (this is the md5 used in filename)
         String md5 = md5Hex(session.arenaName);
-
-        // filename = unixtime-md5.yml
         String fileName = session.startUnix + "-" + md5 + ".yml";
         File outFile = new File(dayFolder, fileName);
 
-        // match_id derived from unix + the SAME md5 used in the filename
         String matchId = matchIdFrom(session.startUnix, md5);
 
         YamlConfiguration yml = new YamlConfiguration();
@@ -63,12 +58,16 @@ public final class MatchStorage {
         for (UUID u : session.getParticipants()) participants.add(u.toString());
         yml.set("match.participants", participants);
 
+        // Optional: correct wins/loses diff if MBedwars flush is late
+        Team winningTeam = session.winningTeam;
+        boolean tie = result != null && result.equalsIgnoreCase("TIE");
+
         for (UUID u : session.getParticipants()) {
             String base = "players." + u;
 
             yml.set(base + ".username", session.getUsername(u));
 
-            var team = session.getTeam(u);
+            Team team = session.getTeam(u);
             yml.set(base + ".team", team != null ? team.name() : null);
 
             yml.set(base + ".start_taken_unix", session.getStartTakenUnix(u));
@@ -80,7 +79,23 @@ public final class MatchStorage {
             if (end != null) yml.createSection(base + ".end", end.values());
 
             if (start != null && end != null) {
-                yml.createSection(base + ".diff", StatSnapshot.diff(start, end));
+                Map<String, Long> diff = new LinkedHashMap<>(StatSnapshot.diff(start, end));
+
+                // Enforce per-match win/lose if not recorded yet
+                if (!tie && winningTeam != null && team != null) {
+                    long winsDiff = diff.getOrDefault("bedwars:wins", 0L);
+                    long losesDiff = diff.getOrDefault("bedwars:loses", 0L);
+
+                    if (team == winningTeam) {
+                        if (winsDiff == 0L) diff.put("bedwars:wins", 1L);
+                        if (losesDiff != 0L) diff.put("bedwars:loses", 0L);
+                    } else {
+                        if (losesDiff == 0L) diff.put("bedwars:loses", 1L);
+                        if (winsDiff != 0L) diff.put("bedwars:wins", 0L);
+                    }
+                }
+
+                yml.createSection(base + ".diff", diff);
             }
         }
 
@@ -106,7 +121,6 @@ public final class MatchStorage {
             for (byte b : dig) sb.append(String.format("%02x", b));
             return sb.toString();
         } catch (Exception e) {
-            // fallback should be stable-ish but not cryptographic
             return Integer.toHexString(s.hashCode());
         }
     }

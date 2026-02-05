@@ -1,7 +1,7 @@
 package com.slg.matchbook.io;
 
+import com.slg.matchbook.MatchbookPlugin;
 import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -10,25 +10,19 @@ import java.util.*;
 
 public final class MatchExporter {
 
-    private final JavaPlugin plugin;
+    private final MatchbookPlugin plugin;
 
-    public MatchExporter(JavaPlugin plugin) {
+    public MatchExporter(MatchbookPlugin plugin) {
         this.plugin = plugin;
     }
 
-    /**
-     * Finds a match by match.match_id and writes a CSV to:
-     *   <pluginDataFolder>/exports/<matchCode>.csv
-     *
-     * @return output File if exported, or null if match not found
-     */
     public File exportMatchToCsv(String matchCode) throws IOException {
         File matchFile = findMatchFileByCode(matchCode);
         if (matchFile == null) return null;
 
         YamlConfiguration yml = YamlConfiguration.loadConfiguration(matchFile);
 
-        File exportsDir = new File(plugin.getDataFolder(), "exports");
+        File exportsDir = new File(plugin.getAddonDataFolder(), "exports");
         if (!exportsDir.exists() && !exportsDir.mkdirs()) {
             throw new IOException("Could not create exports directory: " + exportsDir.getAbsolutePath());
         }
@@ -38,7 +32,6 @@ public final class MatchExporter {
         try (Writer writer = new OutputStreamWriter(new FileOutputStream(outFile), StandardCharsets.UTF_8);
              PrintWriter out = new PrintWriter(writer)) {
 
-            // Header / match info
             String arena = yml.getString("match.arena", "");
             long startUnix = yml.getLong("match.start_unix", 0L);
             long endUnix = yml.getLong("match.end_unix", 0L);
@@ -54,7 +47,6 @@ public final class MatchExporter {
             out.println("# end_time," + csv(formatUnix(endUnix)));
             out.println();
 
-            // Column header (human-readable)
             out.println(String.join(",",
                     "uuid",
                     "username",
@@ -67,7 +59,6 @@ public final class MatchExporter {
                     "loses"
             ));
 
-            // Participants list (stable order)
             List<String> participants = yml.getStringList("match.participants");
             for (String uuidStr : participants) {
                 String base = "players." + uuidStr;
@@ -75,7 +66,6 @@ public final class MatchExporter {
                 String username = yml.getString(base + ".username", "");
                 String team = yml.getString(base + ".team", "");
 
-                // Use DIFF values (per-match)
                 long kills = yml.getLong(base + ".diff.bedwars:kills", 0L);
                 long fk = yml.getLong(base + ".diff.bedwars:final_kills", 0L);
                 long fd = yml.getLong(base + ".diff.bedwars:final_deaths", 0L);
@@ -100,11 +90,8 @@ public final class MatchExporter {
         return outFile;
     }
 
-    /**
-     * Searches all day folders under <dataFolder>/matches for a yaml file whose match.match_id equals matchCode.
-     */
     private File findMatchFileByCode(String matchCode) {
-        File matchesDir = new File(plugin.getDataFolder(), "matches");
+        File matchesDir = new File(plugin.getAddonDataFolder(), "matches");
         if (!matchesDir.exists() || !matchesDir.isDirectory()) return null;
 
         File[] dayDirs = matchesDir.listFiles(File::isDirectory);
@@ -131,7 +118,6 @@ public final class MatchExporter {
         return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(d);
     }
 
-    // Basic CSV escaping
     private static String csv(String s) {
         if (s == null) return "";
         boolean needsQuotes = s.contains(",") || s.contains("\"") || s.contains("\n") || s.contains("\r");

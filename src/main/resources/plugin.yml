@@ -6,3 +6,12 @@ depend: [MBedwars]
 softdepend: [PlaceholderAPI]
 author: SLG
 description: Records per-match MBedwars stats into per-match YAML files.
+commands:
+  matchbook:
+    description: Matchbook root command
+    aliases: [mb]
+    usage: /mb export <matchcode>
+    permission: matchbook.admin
+permissions:
+  matchbook.admin:
+    default: op

@@ -31,10 +31,6 @@ public final class MatchStorage {
         return folder;
     }
 
-    /**
-     * Filename: <startUnix>-<md5(arenaName)>.yml
-     * match_id: last4(startUnix) + "-" + first4(md5 used in filename)
-     */
     public void saveMatchYaml(MatchSession session, String result) {
         long endUnix = session.endUnix != null ? session.endUnix : (System.currentTimeMillis() / 1000L);
 
@@ -58,7 +54,6 @@ public final class MatchStorage {
         for (UUID u : session.getParticipants()) participants.add(u.toString());
         yml.set("match.participants", participants);
 
-        // Optional: correct wins/loses diff if MBedwars flush is late
         Team winningTeam = session.winningTeam;
         boolean tie = result != null && result.equalsIgnoreCase("TIE");
 
@@ -81,7 +76,7 @@ public final class MatchStorage {
             if (start != null && end != null) {
                 Map<String, Long> diff = new LinkedHashMap<>(StatSnapshot.diff(start, end));
 
-                // Enforce per-match win/lose if not recorded yet
+                // Optional: enforce win/lose outcome if MBedwars hasn't persisted by snapshot time
                 if (!tie && winningTeam != null && team != null) {
                     long winsDiff = diff.getOrDefault("bedwars:wins", 0L);
                     long losesDiff = diff.getOrDefault("bedwars:loses", 0L);
@@ -101,6 +96,7 @@ public final class MatchStorage {
 
         try {
             yml.save(outFile);
+            plugin.getLogger().info("Matchbook: wrote match file: " + outFile.getAbsolutePath());
         } catch (IOException e) {
             plugin.getLogger().severe("Failed to save match file " + outFile.getAbsolutePath() + ": " + e.getMessage());
         }

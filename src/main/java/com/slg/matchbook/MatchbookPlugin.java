@@ -55,23 +55,19 @@ public final class MatchbookPlugin extends JavaPlugin {
         }
     }
 
-    /**
-     * Resolve: <jar_dir>/Matchbook
-     * If jar is in plugins/MBedwars/add-ons/, data becomes:
-     *   plugins/MBedwars/add-ons/Matchbook/
-     */
     private File resolveAddonDataFolder() {
-        try {
-            URI uri = getClass().getProtectionDomain().getCodeSource().getLocation().toURI();
-            File jarFile = new File(uri);
-            File jarDir = jarFile.getParentFile(); // should be .../plugins/MBedwars/add-ons
-            if (jarDir != null && jarDir.isDirectory()) {
-                return new File(jarDir, "Matchbook");
-            }
-        } catch (Exception ignored) {
-        }
+        File pluginsDir = getServer().getPluginsFolder(); // .../plugins
+        File addonsDir = new File(new File(pluginsDir, "MBedwars"), "add-ons");
 
-        // fallback: default Bukkit folder
-        return getDataFolder();
+        // If MBedwars uses a different casing on disk sometimes, you can add a second fallback,
+        // but start with the canonical one.
+        File data = new File(addonsDir, "Matchbook");
+
+        getLogger().info("Matchbook: Plugins folder = " + pluginsDir.getAbsolutePath());
+        getLogger().info("Matchbook: MBedwars add-ons = " + addonsDir.getAbsolutePath());
+        getLogger().info("Matchbook: Using data folder = " + data.getAbsolutePath());
+
+        return data;
     }
+
 }

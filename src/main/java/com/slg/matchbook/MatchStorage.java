@@ -40,10 +40,8 @@ public final class MatchStorage {
         String fileName = session.startUnix + "-" + md5 + ".yml";
         File outFile = new File(dayFolder, fileName);
 
-        String matchId = matchIdFrom(session.startUnix, md5);
-
         YamlConfiguration yml = new YamlConfiguration();
-        yml.set("match.match_id", matchId);
+        yml.set("match.match_id", session.matchId);
         yml.set("match.start_unix", session.startUnix);
         yml.set("match.end_unix", endUnix);
         yml.set("match.arena", session.arenaName);
@@ -96,6 +94,14 @@ public final class MatchStorage {
 
         try {
             yml.save(outFile);
+            // Build a RELATIVE path like: "02-05-2026/<filename>.yml"
+            String relative = outFile.getParentFile().getName() + "/" + outFile.getName();
+
+            UserMatchIndex index = new UserMatchIndex(plugin);
+            for (UUID u : session.getParticipants()) {
+                index.addMatchForPlayer(u, session.matchId, relative);
+            }
+
             plugin.getLogger().info("Matchbook: wrote match file: " + outFile.getAbsolutePath());
         } catch (IOException e) {
             plugin.getLogger().severe("Failed to save match file " + outFile.getAbsolutePath() + ": " + e.getMessage());

@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "com.slg"
-version = "0.1.2"
+version = "0.1.6"
 
 java {
     toolchain {

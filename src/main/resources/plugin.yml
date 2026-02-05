@@ -1,6 +1,6 @@
 name: Matchbook
 main: com.slg.matchbook.MatchbookPlugin
-version: 0.1.2
+version: 0.1.6
 api-version: "1.21"
 depend: [MBedwars]
 softdepend: [PlaceholderAPI]
@@ -10,8 +10,11 @@ commands:
   matchbook:
     description: Matchbook root command
     aliases: [mb]
-    usage: /mb export <matchcode>
+    usage: /mb matches | /mb export <matchcode>[, matchcode...]
     permission: matchbook.admin
 permissions:
   matchbook.admin:
     default: op
+  matchbook.matches:
+    description: Allows a player to open their Matchbook match history GUI
+    default: true

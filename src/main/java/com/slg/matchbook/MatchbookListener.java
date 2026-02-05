@@ -77,7 +77,9 @@ public final class MatchbookListener implements Listener {
         Arena arena = event.getArena();
         long startUnix = System.currentTimeMillis() / 1000L;
 
-        MatchSession session = new MatchSession(arena.getName(), startUnix);
+        String matchId = com.slg.matchbook.util.MatchIdUtil.newMatchId();
+        MatchSession session = new MatchSession(matchId, arena.getName(), startUnix);
+
         sessions.put(arena, session);
 
         for (Player p : arena.getPlayers()) session.addParticipant(p.getUniqueId());

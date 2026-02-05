@@ -2,6 +2,7 @@ package com.slg.matchbook;
 
 import de.marcely.bedwars.api.arena.Team;
 
+import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -12,6 +13,9 @@ public final class MatchSession {
     public final String arenaName;
     public final long startUnix;
     public volatile Long endUnix = null;
+    public final String matchId;
+
+    public final Set<de.marcely.bedwars.api.arena.Team> bedLostTeams = new HashSet<>();
 
     // Debug/proof of timing
     public volatile Long startSnapshotTakenUnix = null;
@@ -31,7 +35,8 @@ public final class MatchSession {
 
     private final ConcurrentMap<UUID, Long> startTakenUnixByPlayer = new ConcurrentHashMap<>();
 
-    public MatchSession(String arenaName, long startUnix) {
+    public MatchSession(String matchId, String arenaName, long startUnix) {
+        this.matchId = matchId;
         this.arenaName = arenaName;
         this.startUnix = startUnix;
     }

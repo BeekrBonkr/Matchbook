@@ -1,19 +1,27 @@
 package com.slg.matchbook;
 
+import com.slg.matchbook.commands.MatchbookCommand;
+import com.slg.matchbook.gui.MatchesDetailsGui;
+import com.slg.matchbook.gui.MatchesGui;
+import com.slg.matchbook.placeholders.MatchbookExpansion;
 import de.marcely.bedwars.api.BedwarsAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
-import java.net.URI;
 
 public final class MatchbookPlugin extends JavaPlugin {
 
     private MatchStorage storage;
     private MatchbookListener listener;
+        private MatchesDetailsGui detailsGui;
+        private MatchesGui matchesGui;
 
-    // NEW: custom data folder under MBedwars/add-ons/
+        public MatchesGui getMatchesGui() { return matchesGui; }
+
     private File addonDataFolder;
+
+    // GUI instance
 
     public MatchbookListener getListener() {
         return listener;
@@ -26,9 +34,8 @@ public final class MatchbookPlugin extends JavaPlugin {
     @Override
     public void onEnable() {
         this.addonDataFolder = resolveAddonDataFolder();
-        if (!addonDataFolder.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            addonDataFolder.mkdirs();
+        if (!addonDataFolder.exists() && !addonDataFolder.mkdirs()) {
+            getLogger().warning("Matchbook: Failed to create data folder: " + addonDataFolder.getAbsolutePath());
         }
 
         this.storage = new MatchStorage(this);
@@ -37,10 +44,22 @@ public final class MatchbookPlugin extends JavaPlugin {
             this.listener = new MatchbookListener(this, storage);
             Bukkit.getPluginManager().registerEvents(listener, this);
 
-            getCommand("matchbook").setExecutor(new com.slg.matchbook.commands.MatchbookCommand(this));
+            // GUI
+            this.detailsGui = new MatchesDetailsGui(this);
+            this.matchesGui = new MatchesGui(this, detailsGui);
 
+            Bukkit.getPluginManager().registerEvents(detailsGui, this);
+            Bukkit.getPluginManager().registerEvents(matchesGui, this);
+            // Command
+            if (getCommand("matchbook") != null) {
+                getCommand("matchbook").setExecutor(new MatchbookCommand(this));
+            } else {
+                getLogger().warning("Matchbook: command 'matchbook' not found in plugin.yml");
+            }
+
+            // PlaceholderAPI
             if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
-                new com.slg.matchbook.placeholders.MatchbookExpansion(this).register();
+                new MatchbookExpansion(this).register();
                 getLogger().info("Registered PlaceholderAPI expansion: matchbook");
             }
 
@@ -55,12 +74,13 @@ public final class MatchbookPlugin extends JavaPlugin {
         }
     }
 
+    /**
+     * Hard-pin to: plugins/MBedwars/add-ons/Matchbook
+     * (Don't derive from CodeSource, Paper remaps plugins.)
+     */
     private File resolveAddonDataFolder() {
-        File pluginsDir = getServer().getPluginsFolder(); // .../plugins
+        File pluginsDir = getServer().getPluginsFolder();
         File addonsDir = new File(new File(pluginsDir, "MBedwars"), "add-ons");
-
-        // If MBedwars uses a different casing on disk sometimes, you can add a second fallback,
-        // but start with the canonical one.
         File data = new File(addonsDir, "Matchbook");
 
         getLogger().info("Matchbook: Plugins folder = " + pluginsDir.getAbsolutePath());
@@ -69,5 +89,4 @@ public final class MatchbookPlugin extends JavaPlugin {
 
         return data;
     }
-
 }

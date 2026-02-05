@@ -22,6 +22,8 @@ public final class MatchbookPlugin extends JavaPlugin {
             this.listener = new MatchbookListener(this, storage);
             Bukkit.getPluginManager().registerEvents(listener, this);
 
+            getCommand("matchbook").setExecutor(new com.slg.matchbook.commands.MatchbookCommand(this));
+
             if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
                 new com.slg.matchbook.placeholders.MatchbookExpansion(this).register();
                 getLogger().info("Registered PlaceholderAPI expansion: matchbook");

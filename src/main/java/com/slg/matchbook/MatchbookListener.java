@@ -40,32 +40,26 @@ public final class MatchbookListener implements Listener {
         this.storage = storage;
     }
 
+    public MatchSession getSession(Arena arena) {
+        return sessions.get(arena);
+    }
+
     /**
      * Placeholder / public API:
      * Returns current match code for the player if they are in an arena with an active session, else "".
      *
      * Does NOT rely on BedwarsAPI.getArenaUtil() (not available in some MBedwars API versions).
      */
-    public String getMatchIdForPlayer(Player player) {
+    public String getMatchIdForPlayer(org.bukkit.entity.Player player) {
         if (player == null) return "";
 
-        for (Map.Entry<Arena, MatchSession> entry : sessions.entrySet()) {
-            Arena arena = entry.getKey();
-            if (arena == null) continue;
+        // Find the current session that contains this player
+        for (MatchSession session : sessions.values()) {
+            if (session == null) continue;
 
-            try {
-                if (arena.getPlayers().contains(player)) {
-                    MatchSession session = entry.getValue();
-                    if (session == null) return "";
-
-                    String md5 = MatchStorage.md5Hex(session.arenaName);
-                    String unixStr = Long.toString(session.startUnix);
-                    String last4 = unixStr.length() <= 4 ? unixStr : unixStr.substring(unixStr.length() - 4);
-                    String first4 = md5.length() <= 4 ? md5 : md5.substring(0, 4);
-
-                    return last4 + "-" + first4;
-                }
-            } catch (Throwable ignored) {
+            // participant list is the safest check
+            if (session.getParticipants().contains(player.getUniqueId())) {
+                return session.matchId != null ? session.matchId : "";
             }
         }
 

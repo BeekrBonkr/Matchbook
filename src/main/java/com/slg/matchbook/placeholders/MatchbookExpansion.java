@@ -35,9 +35,17 @@ public final class MatchbookExpansion extends PlaceholderExpansion {
     @Override
     public String onPlaceholderRequest(Player player, String params) {
         if (player == null || params == null) return "";
+        if (plugin.getListener() == null) return "";
 
-        if (params.equalsIgnoreCase("match_code") || params.equalsIgnoreCase("match_id")) {
-            if (plugin.getListener() == null) return "";
+        // Keep OLD placeholders working:
+        //   %matchbook_match_code%
+        //   %matchbook_match_id%
+        //
+        // Also support a nicer canonical one:
+        //   %matchbook_matchid%
+        if (params.equalsIgnoreCase("match_code")
+                || params.equalsIgnoreCase("match_id")
+                || params.equalsIgnoreCase("matchid")) {
             return plugin.getListener().getMatchIdForPlayer(player);
         }
 

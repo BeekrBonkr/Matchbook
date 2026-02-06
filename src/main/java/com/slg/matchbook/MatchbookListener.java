@@ -16,7 +16,6 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,7 +24,7 @@ import java.util.function.Consumer;
 
 public final class MatchbookListener implements Listener {
 
-    private final JavaPlugin plugin;
+    private final MatchbookPlugin plugin;
     private final MatchStorage storage;
 
     private final Map<Arena, MatchSession> sessions = new ConcurrentHashMap<>();
@@ -35,7 +34,7 @@ public final class MatchbookListener implements Listener {
     private static final long END_SNAPSHOT_DELAY_TICKS = 80;   // 4 seconds after RoundEnd
     private static final long SNAPSHOT_TIMEOUT_TICKS = 80L;    // 4 seconds
 
-    public MatchbookListener(JavaPlugin plugin, MatchStorage storage) {
+    public MatchbookListener(MatchbookPlugin plugin, MatchStorage storage) {
         this.plugin = plugin;
         this.storage = storage;
     }
@@ -47,22 +46,16 @@ public final class MatchbookListener implements Listener {
     /**
      * Placeholder / public API:
      * Returns current match code for the player if they are in an arena with an active session, else "".
-     *
-     * Does NOT rely on BedwarsAPI.getArenaUtil() (not available in some MBedwars API versions).
      */
-    public String getMatchIdForPlayer(org.bukkit.entity.Player player) {
+    public String getMatchIdForPlayer(Player player) {
         if (player == null) return "";
 
-        // Find the current session that contains this player
         for (MatchSession session : sessions.values()) {
             if (session == null) continue;
-
-            // participant list is the safest check
             if (session.getParticipants().contains(player.getUniqueId())) {
                 return session.matchId != null ? session.matchId : "";
             }
         }
-
         return "";
     }
 
@@ -189,7 +182,15 @@ public final class MatchbookListener implements Listener {
             }
 
             snapshotMany(session.getParticipants(), snap -> session.putEnd(snap.uuid, snap.snapshot), () -> {
-                storage.saveMatchYaml(session, result);
+                try {
+                    plugin.getRepo().saveMatch(session, result);
+                } catch (Exception e) {
+                    plugin.getLogger().severe("Matchbook: failed to save matchId="
+                            + (session != null ? session.matchId : "null")
+                            + " arena=" + (session != null ? session.arenaName : "null")
+                            + " result=" + result
+                            + " : " + e.getMessage());
+                }
                 sessions.remove(arena);
                 plugin.getLogger().info("Matchbook: saved arena=" + arena.getName()
                         + " participants=" + session.getParticipants().size()
@@ -205,18 +206,28 @@ public final class MatchbookListener implements Listener {
         }
 
         AtomicInteger remaining = new AtomicInteger(uuids.size());
+        java.util.concurrent.atomic.AtomicBoolean finished = new java.util.concurrent.atomic.AtomicBoolean(false);
 
         for (UUID uuid : uuids) {
             snapshotTrackedStats(uuid, statSnap -> {
-                consumer.accept(new UuidSnapshot(uuid, statSnap));
-                if (remaining.decrementAndGet() == 0 && onComplete != null) onComplete.run();
+                // PlayerDataAPI callbacks may be async. Keep ALL session mutation and completion on the server thread.
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    consumer.accept(new UuidSnapshot(uuid, statSnap));
+
+                    if (remaining.decrementAndGet() == 0) {
+                        if (onComplete != null && finished.compareAndSet(false, true)) {
+                            onComplete.run();
+                        }
+                    }
+                });
             });
         }
 
         if (onComplete != null) {
             Bukkit.getScheduler().runTaskLater(plugin, () -> {
-                if (remaining.get() > 0) {
-                    plugin.getLogger().warning("Matchbook: snapshot timeout; completing with partial data. remaining=" + remaining.get());
+                int left = remaining.get();
+                if (left > 0 && finished.compareAndSet(false, true)) {
+                    plugin.getLogger().warning("Matchbook: snapshot timeout; completing with partial data. remaining=" + left);
                     onComplete.run();
                 }
             }, SNAPSHOT_TIMEOUT_TICKS);
@@ -286,9 +297,22 @@ public final class MatchbookListener implements Listener {
 
     public void flushAll(String reason) {
         plugin.getLogger().warning("Matchbook: flushAll (" + reason + ") saving partial sessions.");
-        for (MatchSession session : sessions.values()) {
-            storage.saveMatchYaml(session, "ABORTED");
+
+        // Snapshot to avoid concurrent modification issues
+        List<MatchSession> snapshot = new ArrayList<>(sessions.values());
+
+        for (MatchSession session : snapshot) {
+            try {
+                // Use selected storage backend (yaml or mysql)
+                plugin.getRepo().saveMatch(session, "ABORTED");
+            } catch (Exception e) {
+                plugin.getLogger().severe("Matchbook: flushAll failed to save matchId="
+                        + (session != null ? session.matchId : "null")
+                        + " arena=" + (session != null ? session.arenaName : "null")
+                        + " : " + e.getMessage());
+            }
         }
+
         sessions.clear();
     }
 

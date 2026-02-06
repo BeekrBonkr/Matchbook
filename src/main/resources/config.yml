@@ -1,0 +1,51 @@
+# Matchbook configuration
+
+storage:
+  # yaml or mysql
+  type: yaml
+
+  # When mysql is selected
+  mysql:
+    host: "127.0.0.1"
+    port: 3306
+    database: "matchbook"
+    username: "matchbook"
+    password: "change_me"
+    # Optional: append URL params. Example: "useUnicode=true&characterEncoding=utf8"
+    params: "useUnicode=true&characterEncoding=utf8&useSSL=false"
+    # Table prefix so multiple networks can share one DB.
+    table_prefix: "matchbook_"
+    pool:
+      maximum_pool_size: 10
+      minimum_idle: 2
+      connection_timeout_ms: 10000
+      idle_timeout_ms: 300000
+      max_lifetime_ms: 1800000
+
+match:
+  # When MBedwars doesn't update win/loss quickly enough, enforce wins/loses from the match result.
+  # If a tie or aborted match, no wins/loses are forced.
+  enforce_win_loss_from_result: true
+
+  # If enabled, when a match file is saved, print the match code in chat to all participants.
+  announce_match_code: true
+
+  # Limits for snapshot waiting/retry
+  start_snapshot_delay_ticks: 20
+  end_snapshot_delay_ticks: 10
+  running_wait_ticks_max: 100
+  snapshot_timeout_ticks: 40
+
+  # Track these stat keys from MBedwars player data API
+  # Add more keys if you want; Matchbook will store them and export diffs if present.
+  tracked_keys:
+    - "bedwars:kills"
+    - "bedwars:final_kills"
+    - "bedwars:final_deaths"
+    - "bedwars:beds_destroyed"
+    - "bedwars:wins"
+    - "bedwars:loses"
+    - "bedwars:beds_lost"
+
+logging:
+  debug: false

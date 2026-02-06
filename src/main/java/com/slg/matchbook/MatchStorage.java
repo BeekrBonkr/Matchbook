@@ -1,6 +1,6 @@
 package com.slg.matchbook;
 
-import de.marcely.bedwars.api.arena.Team;
+import com.slg.matchbook.io.MatchYamlCodec;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
@@ -32,65 +32,13 @@ public final class MatchStorage {
     }
 
     public void saveMatchYaml(MatchSession session, String result) {
-        long endUnix = session.endUnix != null ? session.endUnix : (System.currentTimeMillis() / 1000L);
-
         File dayFolder = getDayFolder(new Date(session.startUnix * 1000L));
 
         String md5 = md5Hex(session.arenaName);
         String fileName = session.startUnix + "-" + md5 + ".yml";
         File outFile = new File(dayFolder, fileName);
 
-        YamlConfiguration yml = new YamlConfiguration();
-        yml.set("match.match_id", session.matchId);
-        yml.set("match.start_unix", session.startUnix);
-        yml.set("match.end_unix", endUnix);
-        yml.set("match.arena", session.arenaName);
-        yml.set("match.result", result);
-        yml.set("match.start_snapshot_taken_unix", session.startSnapshotTakenUnix);
-
-        List<String> participants = new ArrayList<>();
-        for (UUID u : session.getParticipants()) participants.add(u.toString());
-        yml.set("match.participants", participants);
-
-        Team winningTeam = session.winningTeam;
-        boolean tie = result != null && result.equalsIgnoreCase("TIE");
-
-        for (UUID u : session.getParticipants()) {
-            String base = "players." + u;
-
-            yml.set(base + ".username", session.getUsername(u));
-
-            Team team = session.getTeam(u);
-            yml.set(base + ".team", team != null ? team.name() : null);
-
-            yml.set(base + ".start_taken_unix", session.getStartTakenUnix(u));
-
-            StatSnapshot start = session.getStart(u);
-            StatSnapshot end = session.getEnd(u);
-
-            if (start != null) yml.createSection(base + ".start", start.values());
-            if (end != null) yml.createSection(base + ".end", end.values());
-
-            if (start != null && end != null) {
-                Map<String, Long> diff = new LinkedHashMap<>(StatSnapshot.diff(start, end));
-
-                // Optional: enforce win/lose outcome if MBedwars hasn't persisted by snapshot time
-                if (!tie && winningTeam != null && team != null) {
-                    long winsDiff = diff.getOrDefault("bedwars:wins", 0L);
-                    long losesDiff = diff.getOrDefault("bedwars:loses", 0L);
-
-                    if (team == winningTeam) {
-                        if (winsDiff == 0L) diff.put("bedwars:wins", 1L);
-                        if (losesDiff != 0L) diff.put("bedwars:loses", 0L);
-                    } else {
-                        if (losesDiff == 0L) diff.put("bedwars:loses", 1L);
-                        if (winsDiff != 0L) diff.put("bedwars:wins", 0L);
-                    }
-                }
-
-                yml.createSection(base + ".diff", diff);
-            }
-        }
+        YamlConfiguration yml = MatchYamlCodec.toYaml(session, result);
 
         try {
             yml.save(outFile);

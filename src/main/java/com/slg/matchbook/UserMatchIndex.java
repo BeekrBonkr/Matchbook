@@ -88,4 +88,12 @@ public final class UserMatchIndex {
             plugin.getLogger().warning("Matchbook: failed updating user index " + f.getAbsolutePath() + ": " + e.getMessage());
         }
     }
+
+    public List<String> getMatchIdsForPlayer(UUID uuid) {
+        File f = new File(usersDir(), uuid.toString() + ".yml");
+        if (!f.exists()) return List.of();
+
+        YamlConfiguration yml = YamlConfiguration.loadConfiguration(f);
+        return new ArrayList<>(yml.getStringList("matches"));
+    }
 }

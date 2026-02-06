@@ -26,10 +26,8 @@ public final class MatchExporter {
      * Single match export -> exports/<matchCode>.csv
      */
     public File exportMatchToCsv(String matchCode) throws IOException {
-        File matchFile = findMatchFileByCode(matchCode);
-        if (matchFile == null) return null;
-
-        YamlConfiguration yml = YamlConfiguration.loadConfiguration(matchFile);
+        YamlConfiguration yml = plugin.getRepo().loadMatchYaml(matchCode);
+        if (yml == null) return null;
 
         File exportsDir = new File(plugin.getAddonDataFolder(), "exports");
         if (!exportsDir.exists() && !exportsDir.mkdirs()) {
@@ -90,13 +88,13 @@ public final class MatchExporter {
         }
 
         // Find all files first (and tell caller if any are missing)
-        List<File> matchFiles = new ArrayList<>();
         List<String> missing = new ArrayList<>();
+        List<YamlConfiguration> matchYmls = new ArrayList<>();
 
         for (String code : matchCodes) {
-            File f = findMatchFileByCode(code);
-            if (f == null) missing.add(code);
-            else matchFiles.add(f);
+            YamlConfiguration yml = plugin.getRepo().loadMatchYaml(code);
+            if (yml == null) missing.add(code);
+            else matchYmls.add(yml);
         }
 
         if (!missing.isEmpty()) {
@@ -121,8 +119,7 @@ public final class MatchExporter {
         // Aggregate by UUID
         Map<String, AggRow> rows = new LinkedHashMap<>();
 
-        for (File matchFile : matchFiles) {
-            YamlConfiguration yml = YamlConfiguration.loadConfiguration(matchFile);
+        for (YamlConfiguration yml : matchYmls) {
 
             List<String> participants = yml.getStringList("match.participants");
             for (String uuidStr : participants) {
@@ -183,31 +180,6 @@ public final class MatchExporter {
         }
 
         return outFile;
-    }
-
-    /**
-     * Searches all day folders under <addonDataFolder>/matches for a yaml whose match.match_id equals matchCode.
-     */
-    private File findMatchFileByCode(String matchCode) {
-        File matchesDir = new File(plugin.getAddonDataFolder(), "matches");
-        if (!matchesDir.exists() || !matchesDir.isDirectory()) return null;
-
-        File[] dayDirs = matchesDir.listFiles(File::isDirectory);
-        if (dayDirs == null) return null;
-
-        for (File dayDir : dayDirs) {
-            File[] files = dayDir.listFiles((dir, name) -> name.endsWith(".yml"));
-            if (files == null) continue;
-
-            for (File f : files) {
-                YamlConfiguration yml = YamlConfiguration.loadConfiguration(f);
-                String id = yml.getString("match.match_id", "");
-                if (matchCode.equalsIgnoreCase(id)) {
-                    return f;
-                }
-            }
-        }
-        return null;
     }
 
     private static String csv(String s) {

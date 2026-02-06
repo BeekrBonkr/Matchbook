@@ -1,9 +1,11 @@
 package com.slg.matchbook;
 
 import com.slg.matchbook.commands.MatchbookCommand;
+import com.slg.matchbook.config.StorageType;
 import com.slg.matchbook.gui.MatchesDetailsGui;
 import com.slg.matchbook.gui.MatchesGui;
 import com.slg.matchbook.placeholders.MatchbookExpansion;
+import com.slg.matchbook.storage.MatchRepository;
 import de.marcely.bedwars.api.BedwarsAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -12,12 +14,20 @@ import java.io.File;
 
 public final class MatchbookPlugin extends JavaPlugin {
 
+    public MatchRepository getRepo() {
+        return repo;
+    }
+
+    private com.slg.matchbook.config.MatchbookConfig config;
+    private MatchRepository repo;
+
     private MatchStorage storage;
     private MatchbookListener listener;
         private MatchesDetailsGui detailsGui;
         private MatchesGui matchesGui;
 
         public MatchesGui getMatchesGui() { return matchesGui; }
+        public MatchesDetailsGui getDetailsGui() { return detailsGui; }
 
     private File addonDataFolder;
 
@@ -25,6 +35,10 @@ public final class MatchbookPlugin extends JavaPlugin {
 
     public MatchbookListener getListener() {
         return listener;
+    }
+
+    public com.slg.matchbook.config.MatchbookConfig getMatchbookConfig() {
+        return config;
     }
 
     public File getAddonDataFolder() {
@@ -36,6 +50,21 @@ public final class MatchbookPlugin extends JavaPlugin {
         this.addonDataFolder = resolveAddonDataFolder();
         if (!addonDataFolder.exists() && !addonDataFolder.mkdirs()) {
             getLogger().warning("Matchbook: Failed to create data folder: " + addonDataFolder.getAbsolutePath());
+        }
+
+        this.config = new com.slg.matchbook.config.MatchbookConfig(this);
+        this.config.load();
+
+        StorageType type = config.storageType();
+        if (type == StorageType.MYSQL) this.repo = new com.slg.matchbook.storage.MySqlMatchRepository(this, config.raw());
+        else this.repo = new com.slg.matchbook.storage.YamlMatchRepository(this);
+
+        try {
+            this.repo.init();
+        } catch (Exception e) {
+            getLogger().severe("Matchbook: Storage init failed (" + type + "). Falling back to YAML. " + e.getMessage());
+            this.repo = new com.slg.matchbook.storage.YamlMatchRepository(this);
+            try { this.repo.init(); } catch (Exception ignored) {}
         }
 
         this.storage = new MatchStorage(this);
@@ -52,7 +81,9 @@ public final class MatchbookPlugin extends JavaPlugin {
             Bukkit.getPluginManager().registerEvents(matchesGui, this);
             // Command
             if (getCommand("matchbook") != null) {
-                getCommand("matchbook").setExecutor(new MatchbookCommand(this));
+                MatchbookCommand cmd = new MatchbookCommand(this);
+                getCommand("matchbook").setExecutor(cmd);
+                getCommand("matchbook").setTabCompleter(cmd);
             } else {
                 getLogger().warning("Matchbook: command 'matchbook' not found in plugin.yml");
             }
@@ -69,6 +100,8 @@ public final class MatchbookPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (repo != null) repo.shutdown();
+
         if (listener != null) {
             listener.flushAll("plugin-disable");
         }

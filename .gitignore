@@ -1,39 +1,19 @@
 # Gradle
 .gradle/
 build/
-out/
-*.log
 
-# IntelliJ / JetBrains
+# IntelliJ / VSCode
 .idea/
 *.iml
-
-# Eclipse
-.classpath
-.project
-.settings/
-
-# VS Code
 .vscode/
 
-# macOS / Linux junk
+# OS
 .DS_Store
 Thumbs.db
 
-# Local run / server test folders (if you keep them inside the repo)
+# Logs
+*.log
+
+# Local testing server dirs
 run/
 server/
-plugins/
-world*/
-logs/
-
-# Config / exports / matches produced by the plugin (inside your project workspace, if any)
-src/main/resources/*.local.yml
-
-# Java
-*.class
-hs_err_pid*
-replay_pid*
-
-# Wrapper cache (keep wrapper jar + scripts, ignore user-specific)
-!gradle/wrapper/gradle-wrapper.jar

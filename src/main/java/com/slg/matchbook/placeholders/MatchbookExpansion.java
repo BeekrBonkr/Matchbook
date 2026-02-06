@@ -40,12 +40,15 @@ public final class MatchbookExpansion extends PlaceholderExpansion {
         // Keep OLD placeholders working:
         //   %matchbook_match_code%
         //   %matchbook_match_id%
+        // Some older configs used variations without underscores.
         //
-        // Also support a nicer canonical one:
+        // Canonical:
         //   %matchbook_matchid%
-        if (params.equalsIgnoreCase("match_code")
-                || params.equalsIgnoreCase("match_id")
-                || params.equalsIgnoreCase("matchid")) {
+        String key = params.trim().toLowerCase();
+        if (key.equals("match_code")
+                || key.equals("match_id")
+                || key.equals("matchcode")
+                || key.equals("matchid")) {
             return plugin.getListener().getMatchIdForPlayer(player);
         }
 

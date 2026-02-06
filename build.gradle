@@ -1,9 +1,10 @@
 plugins {
     id "java"
+    id "com.github.johnrengelman.shadow" version "8.1.1"
 }
 
 group = "com.slg"
-version = "0.1.6"
+version = "0.2.6"
 
 java {
     toolchain {
@@ -22,12 +23,23 @@ repositories {
 
 dependencies {
     compileOnly "io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT"
-
-    // MBedwars API (choose the version that matches your installed MBedwars)
     compileOnly "de.marcely.bedwars:API:5.5.6"
-
-    // PlaceholderAPI (optional)
     compileOnly "me.clip:placeholderapi:2.11.6"
+
+    // MySQL support (shaded into the final jar)
+    implementation "com.zaxxer:HikariCP:5.1.0"
+    implementation "com.mysql:mysql-connector-j:9.0.0"
+}
+
+shadowJar {
+    archiveClassifier.set("")
+    // Keep dependencies inside one jar for admin UX.
+    // (Relocation is optional; leave it off to reduce surprises with JDBC SPI.)
+}
+
+// Convenience alias: some admins type `shadowjar` (lowercase).
+tasks.register("shadowjar") {
+    dependsOn(tasks.named("shadowJar"))
 }
 
 tasks.withType(JavaCompile).configureEach {

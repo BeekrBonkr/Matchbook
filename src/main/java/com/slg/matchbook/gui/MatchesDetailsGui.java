@@ -38,7 +38,12 @@ public final class MatchesDetailsGui implements Listener {
     }
 
     public void openDetails(Player viewer, String matchId, int page) {
-        File matchFile = findMatchFileById(matchId);
+        YamlConfiguration yml = plugin.getRepo().loadMatchYaml(matchId);
+        // Legacy fallback: if repo is YAML but match not indexed correctly
+        if (yml == null) {
+            File matchFile = findMatchFileById(matchId);
+            if (matchFile != null) yml = YamlConfiguration.loadConfiguration(matchFile);
+        }
 
         Inventory inv = Bukkit.createInventory(new DetailsHolder(viewer.getUniqueId(), matchId, page), SIZE,
                 ChatColor.DARK_GRAY + "Match Details " + ChatColor.GRAY + "(" + matchId + ")");
@@ -52,14 +57,12 @@ public final class MatchesDetailsGui implements Listener {
         inv.setItem(SLOT_NEXT, button(Material.ARROW, ChatColor.YELLOW + "Next Page"));
         inv.setItem(SLOT_BACK, button(Material.ARROW, ChatColor.YELLOW + "Back"));
 
-        if (matchFile == null) {
+        if (yml == null) {
             inv.setItem(22, errorItem("Match not found", matchId));
             open.put(viewer.getUniqueId(), new DetailsState(matchId, page));
             viewer.openInventory(inv);
             return;
         }
-
-        YamlConfiguration yml = YamlConfiguration.loadConfiguration(matchFile);
 
         // Header item (center top-ish)
         inv.setItem(4, buildHeaderItem(yml));
@@ -68,7 +71,8 @@ public final class MatchesDetailsGui implements Listener {
         List<String> participants = yml.getStringList("match.participants");
 
         // Sort: winning team first, then final kills desc, then kills desc
-        participants.sort((a, b) -> comparePlayers(yml, a, b));
+        final YamlConfiguration ymlFinal = yml;
+        participants.sort((a, b) -> comparePlayers(ymlFinal, a, b));
 
         int maxPage = Math.max(0, (participants.size() - 1) / PAGE_SLOTS);
         int p = Math.max(0, Math.min(page, maxPage));

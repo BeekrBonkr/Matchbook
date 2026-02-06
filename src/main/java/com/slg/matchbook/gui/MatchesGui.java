@@ -45,7 +45,8 @@ public final class MatchesGui implements Listener {
 
     /** Open match history for targetUuid (usually self). */
     public void openHistory(Player viewer, UUID targetUuid, int page) {
-        List<String> matchIds = loadUserMatchIds(targetUuid); // newest first recommended
+        // Storage-agnostic. YAML mode uses users/<uuid>.yml index; MySQL mode uses player_matches.
+        List<String> matchIds = plugin.getRepo().listMatchIdsForPlayer(targetUuid);
 
         int maxPage = Math.max(0, (matchIds.size() - 1) / PAGE_SLOTS);
         int p = Math.max(0, Math.min(page, maxPage));
@@ -77,43 +78,47 @@ public final class MatchesGui implements Listener {
         viewer.openInventory(inv);
     }
 
+    /** Open a global match list (all matches), most recent first. */
+    public void openAll(Player viewer, int page) {
+        List<String> matchIds = plugin.getRepo().listAllMatchIds();
+
+        int maxPage = Math.max(0, (matchIds.size() - 1) / PAGE_SLOTS);
+        int p = Math.max(0, Math.min(page, maxPage));
+
+        Inventory inv = Bukkit.createInventory(new AllHolder(viewer.getUniqueId(), p), SIZE,
+                ChatColor.DARK_GRAY + "All Matches " + ChatColor.GRAY + "(" + (p + 1) + "/" + (maxPage + 1) + ")");
+
+        for (int i = 45; i < 54; i++) {
+            inv.setItem(i, pane(Material.BLACK_STAINED_GLASS_PANE, " "));
+        }
+
+        inv.setItem(SLOT_PREV, button(Material.ARROW, ChatColor.YELLOW + "Previous Page"));
+        inv.setItem(SLOT_NEXT, button(Material.ARROW, ChatColor.YELLOW + "Next Page"));
+        inv.setItem(SLOT_BACK, button(Material.BARRIER, ChatColor.RED + "Close"));
+
+        int start = p * PAGE_SLOTS;
+        int end = Math.min(matchIds.size(), start + PAGE_SLOTS);
+
+        int slot = 0;
+        for (int i = start; i < end; i++) {
+            String matchId = matchIds.get(i);
+            ItemStack it = buildHistoryItem(viewer.getUniqueId(), matchId);
+            inv.setItem(slot++, it);
+        }
+
+        viewer.openInventory(inv);
+    }
+
+
     /* =========================================================
        Data access
        ========================================================= */
 
-    /** Reads Matchbook/users/<uuid>.yml -> matches: [ ... match_id ... ] */
-    private List<String> loadUserMatchIds(UUID targetUuid) {
-        File usersDir = new File(plugin.getAddonDataFolder(), "users");
-        File f = new File(usersDir, targetUuid.toString() + ".yml");
-        if (!f.exists()) return List.of();
+    // NOTE: We intentionally removed direct file reads here.
 
-        YamlConfiguration yml = YamlConfiguration.loadConfiguration(f);
-        List<String> ids = yml.getStringList("matches");
-
-        // If you’re currently storing filenames instead of match IDs,
-        // replace this with a mapping step. But your new system should store match_id.
-        return new ArrayList<>(ids);
-    }
-
-    /** Find match YAML by match.match_id (scans matches/<day>/*.yml). */
+    /** Find match YAML file path if available (YAML storage). */
     private File findMatchFileById(String matchId) {
-        File matchesDir = new File(plugin.getAddonDataFolder(), "matches");
-        if (!matchesDir.exists()) return null;
-
-        File[] dayDirs = matchesDir.listFiles(File::isDirectory);
-        if (dayDirs == null) return null;
-
-        for (File day : dayDirs) {
-            File[] files = day.listFiles((dir, name) -> name.endsWith(".yml"));
-            if (files == null) continue;
-
-            for (File f : files) {
-                YamlConfiguration y = YamlConfiguration.loadConfiguration(f);
-                String id = y.getString("match.match_id", "");
-                if (matchId.equalsIgnoreCase(id)) return f;
-            }
-        }
-        return null;
+        return plugin.getRepo().findMatchFileById(matchId);
     }
 
     /* =========================================================
@@ -122,20 +127,19 @@ public final class MatchesGui implements Listener {
 
     private ItemStack buildHistoryItem(UUID viewerUuid, String matchEntry) {
         // matchEntry can be either a matchId (preferred) or a legacy relative path (MM-dd-yyyy/file.yml)
-        File matchFile;
         String matchId = matchEntry;
 
+        // If legacy path, resolve match_id from the file on disk
         if (matchEntry != null && (matchEntry.contains("/") || matchEntry.endsWith(".yml"))) {
-            matchFile = new File(new File(plugin.getAddonDataFolder(), "matches"), matchEntry);
-            if (!matchFile.exists()) matchFile = null;
-            if (matchFile != null) {
-                YamlConfiguration ymlTmp = YamlConfiguration.loadConfiguration(matchFile);
-                String fromFile = ymlTmp.getString("match.match_id", "");
+            File legacy = new File(new File(plugin.getAddonDataFolder(), "matches"), matchEntry);
+            if (legacy.exists()) {
+                YamlConfiguration tmp = YamlConfiguration.loadConfiguration(legacy);
+                String fromFile = tmp.getString("match.match_id", "");
                 if (fromFile != null && !fromFile.isBlank()) matchId = fromFile;
             }
-        } else {
-            matchFile = findMatchFileById(matchId);
         }
+
+        YamlConfiguration yml = plugin.getRepo().loadMatchYaml(matchId);
 
         ItemStack it = new ItemStack(Material.PAPER);
         ItemMeta meta = it.getItemMeta();
@@ -143,14 +147,12 @@ public final class MatchesGui implements Listener {
         // store match id in PDC so click can open details
         meta.getPersistentDataContainer().set(KEY_MATCH_ID, PersistentDataType.STRING, matchId);
 
-        if (matchFile == null) {
+        if (yml == null) {
             meta.setDisplayName(ChatColor.RED + matchId + ChatColor.GRAY + " • missing file");
             meta.setLore(List.of(ChatColor.GRAY + "Match YAML not found."));
             it.setItemMeta(meta);
             return it;
         }
-
-        YamlConfiguration yml = YamlConfiguration.loadConfiguration(matchFile);
 
         String arena = yml.getString("match.arena", "");
         String result = yml.getString("match.result", "");
@@ -205,7 +207,11 @@ public final class MatchesGui implements Listener {
         if (!(e.getWhoClicked() instanceof Player p)) return;
 
         Inventory top = e.getView().getTopInventory();
-        if (!(top.getHolder() instanceof HistoryHolder holder)) return;
+        InventoryHolder h = top.getHolder();
+        if (!(h instanceof HistoryHolder) && !(h instanceof AllHolder)) return;
+
+        HistoryHolder holder = (h instanceof HistoryHolder hh) ? hh : null;
+        AllHolder allHolder = (h instanceof AllHolder ah) ? ah : null;
 
         // lock everything in our GUI
         e.setCancelled(true);
@@ -218,11 +224,13 @@ public final class MatchesGui implements Listener {
             return;
         }
         if (raw == SLOT_PREV) {
-            openHistory(p, holder.targetUuid, holder.page - 1);
+            if (holder != null) openHistory(p, holder.targetUuid, holder.page - 1);
+            else openAll(p, allHolder.page - 1);
             return;
         }
         if (raw == SLOT_NEXT) {
-            openHistory(p, holder.targetUuid, holder.page + 1);
+            if (holder != null) openHistory(p, holder.targetUuid, holder.page + 1);
+            else openAll(p, allHolder.page + 1);
             return;
         }
 
@@ -340,4 +348,18 @@ public final class MatchesGui implements Listener {
 
         @Override public Inventory getInventory() { return null; }
     }
+
+
+    private static final class AllHolder implements InventoryHolder {
+        final UUID viewerUuid;
+        final int page;
+
+        AllHolder(UUID viewerUuid, int page) {
+            this.viewerUuid = viewerUuid;
+            this.page = page;
+        }
+
+        @Override public Inventory getInventory() { return null; }
+    }
+
 }

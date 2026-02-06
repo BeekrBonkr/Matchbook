@@ -1,25 +1,25 @@
 name: Matchbook
 main: com.slg.matchbook.MatchbookPlugin
-version: 0.2.7
+version: 0.3.1
 api-version: "1.21"
 depend: [MBedwars]
 softdepend: [PlaceholderAPI]
-author: SLG
-description: Records per-match MBedwars stats into per-match YAML files.
+
 commands:
   matchbook:
-    description: Matchbook root command
+    description: "Matchbook root command"
     aliases: [mb]
-    usage: /mb help
+    usage: "/mb help"
     permission: mb.command.use
+
 permissions:
   # New permission model (recommended)
   mb.command.use:
-    description: Allows using /mb at all
+    description: "Allows using /mb at all"
     default: true
 
   mb.command.default:
-    description: Grants access to common Matchbook commands
+    description: "Grants access to common Matchbook commands"
     default: true
     children:
       mb.command.matches: true
@@ -29,36 +29,44 @@ permissions:
       mb.command.help: true
 
   mb.command.admin:
-    description: Grants access to admin Matchbook commands
+    description: "Grants access to admin Matchbook commands"
     default: op
     children:
       mb.command.migrate: true
 
   mb.command.matches:
-    description: /mb matches
+    description: "/mb matches"
     default: false
+
   mb.command.all:
-    description: /mb all
+    description: "/mb all"
     default: false
+
   mb.command.view:
-    description: /mb view <matchcode>
+    description: "/mb view <matchcode>"
     default: false
+
   mb.command.export:
-    description: /mb export <matchcode[,matchcode...]>
+    description: "/mb export <matchcode[,matchcode...]>"
     default: false
+
   mb.command.help:
-    description: /mb help
+    description: "/mb help"
     default: false
+
   mb.command.migrate:
-    description: /mb migrate yaml2mysql|mysql2yaml [--dry-run]
+    description: "/mb migrate yaml2mysql|mysql2yaml [--dry-run]"
     default: false
 
   # Legacy nodes (kept for backwards compatibility)
   matchbook.admin:
+    description: "Legacy admin permission"
     default: op
+
   matchbook.matches:
-    description: Legacy: Allows a player to open their match history GUI
+    description: "Legacy: Allows a player to open their match history GUI"
     default: false
+
   matchbook.migrate:
-    description: Legacy: Allows migrating Matchbook data between YAML and MySQL
+    description: "Legacy: Allows migrating Matchbook data between YAML and MySQL"
     default: op

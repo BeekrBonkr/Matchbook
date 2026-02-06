@@ -36,36 +36,40 @@ public final class MySqlMatchRepository implements MatchRepository {
 
     @Override
     public void init() throws Exception {
-        this.prefix = cfg.getString("mysql.table_prefix", "matchbook_");
+        this.prefix = s("mysql.table_prefix", "storage.mysql.table_prefix", "matchbook_");
 
-        String host = cfg.getString("mysql.host", "127.0.0.1");
-        int port = cfg.getInt("mysql.port", 3306);
-        String database = cfg.getString("mysql.database", "minecraft");
-        String username = cfg.getString("mysql.username", "root");
-        String password = cfg.getString("mysql.password", "");
-        boolean useSsl = cfg.getBoolean("mysql.use_ssl", false);
-        boolean allowPkr = cfg.getBoolean("mysql.allow_public_key_retrieval", true);
-        String tz = cfg.getString("mysql.server_timezone", "UTC");
+        String host = s("mysql.host", "storage.mysql.host", "127.0.0.1");
+        int port = i("mysql.port", "storage.mysql.port", 3306);
+        String database = s("mysql.database", "storage.mysql.database", "minecraft");
+        String username = s("mysql.username", "storage.mysql.username", "root");
+        String password = s("mysql.password", "storage.mysql.password", "");
 
-        String jdbc = "jdbc:mysql://" + host + ":" + port + "/" + database
-                + "?useSSL=" + useSsl
-                + "&allowPublicKeyRetrieval=" + allowPkr
-                + "&serverTimezone=" + tz
-                + "&characterEncoding=utf8"
-                + "&useUnicode=true";
+        String params = s("mysql.params", "storage.mysql.params",
+                "useUnicode=true&characterEncoding=utf8&useSSL=true&requireSSL=true&verifyServerCertificate=false&allowPublicKeyRetrieval=true&serverTimezone=UTC");
+
+        // Safety: trim and strip leading '?'
+        params = params == null ? "" : params.trim();
+        if (params.startsWith("?")) params = params.substring(1);
+
+        // Build the JDBC URL correctly
+        String jdbc = "jdbc:mysql://" + host + ":" + port + "/" + database;
+        if (!params.isEmpty()) jdbc += "?" + params;
+
+        // Log URL without leaking credentials
+        plugin.getLogger().info("[Matchbook] MySQL JDBC: " + jdbc);
 
         HikariConfig hc = new HikariConfig();
         hc.setJdbcUrl(jdbc);
         hc.setUsername(username);
         hc.setPassword(password);
 
-        hc.setMaximumPoolSize(cfg.getInt("mysql.pool.max_pool_size", 10));
-        hc.setMinimumIdle(cfg.getInt("mysql.pool.min_idle", 2));
-        hc.setConnectionTimeout(cfg.getLong("mysql.pool.connection_timeout_ms", 10000));
-        hc.setIdleTimeout(cfg.getLong("mysql.pool.idle_timeout_ms", 600000));
-        hc.setMaxLifetime(cfg.getLong("mysql.pool.max_lifetime_ms", 1800000));
+        hc.setMaximumPoolSize(i("mysql.pool.maximum_pool_size", "storage.mysql.pool.maximum_pool_size", 10));
+        hc.setMinimumIdle(i("mysql.pool.minimum_idle", "storage.mysql.pool.minimum_idle", 2));
+        hc.setConnectionTimeout(l("mysql.pool.connection_timeout_ms", "storage.mysql.pool.connection_timeout_ms", 10000));
+        hc.setIdleTimeout(l("mysql.pool.idle_timeout_ms", "storage.mysql.pool.idle_timeout_ms", 300000));
+        hc.setMaxLifetime(l("mysql.pool.max_lifetime_ms", "storage.mysql.pool.max_lifetime_ms", 1800000));
 
-        // Important for stability: fail fast if DB can't connect
+        // fail fast if DB can't connect
         hc.setInitializationFailTimeout(10000);
 
         this.ds = new HikariDataSource(hc);
@@ -317,4 +321,21 @@ public final class MySqlMatchRepository implements MatchRepository {
         // Keep MySQL mode byte-for-byte consistent with YAML mode.
         return com.slg.matchbook.io.MatchYamlCodec.toYamlString(session, result);
     }
+
+    private String s(String a, String b, String def) {
+        String v = cfg.getString(a);
+        if (v == null) v = cfg.getString(b);
+        return v != null ? v : def;
+    }
+    private int i(String a, String b, int def) {
+        if (cfg.contains(a)) return cfg.getInt(a);
+        if (cfg.contains(b)) return cfg.getInt(b);
+        return def;
+    }
+    private long l(String a, String b, long def) {
+        if (cfg.contains(a)) return cfg.getLong(a);
+        if (cfg.contains(b)) return cfg.getLong(b);
+        return def;
+    }
+
 }

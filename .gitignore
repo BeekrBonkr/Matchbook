@@ -1,19 +1,50 @@
-# Gradle
+# --- Gradle ---
 .gradle/
 build/
+out/
+*.log
 
-# IntelliJ / VSCode
+# Gradle wrapper (keep these)
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# --- IntelliJ IDEA ---
 .idea/
 *.iml
+*.ipr
+*.iws
+
+# --- Eclipse ---
+.classpath
+.project
+.settings/
+
+# --- VS Code ---
 .vscode/
 
-# OS
+# --- OS / misc ---
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
+# --- Java ---
+*.class
+hs_err_pid*
 
-# Local testing server dirs
+# --- Local runtime / dev server folders (optional) ---
 run/
 server/
+paper/
+spigot/
+logs/
+plugins/
+world*/
+cache/
+
+# --- Local config/secrets (optional, only if you use them) ---
+.env
+*.local
+secrets.yml
+
+# --- Maven/Gradle shading / bins (just in case) ---
+*.jar
+!gradle/wrapper/gradle-wrapper.jar

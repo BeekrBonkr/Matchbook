@@ -51,4 +51,23 @@ public final class MatchbookConfig {
         // If it exists, update/merge if version differs
         ConfigUpdater.updateIfNeeded(plugin, file, "config-version");
     }
+
+    private void ensureDefault() {
+        if (file.exists()) return;
+        if (!file.getParentFile().exists() && !file.getParentFile().mkdirs()) {
+            plugin.getLogger().warning("Matchbook: Failed to create config folder: " + file.getParentFile().getAbsolutePath());
+            return;
+        }
+
+        try (InputStream in = plugin.getResource("config.yml")) {
+            if (in == null) {
+                // Extremely defensive fallback
+                Files.writeString(file.toPath(), "storage:\n  type: yaml\nmysql:\n  host: localhost\n  port: 3306\n  database: matchbook\n  username: root\n  password: ''\n  useSSL: false\n  pool:\n    maximumPoolSize: 10\n    minimumIdle: 2\n    connectionTimeoutMs: 10000\n", java.nio.charset.StandardCharsets.UTF_8);
+                return;
+            }
+            Files.copy(in, file.toPath());
+        } catch (IOException e) {
+            plugin.getLogger().warning("Matchbook: Failed to write default config.yml: " + e.getMessage());
+        }
+    }
 }

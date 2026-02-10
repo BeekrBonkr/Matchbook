@@ -1,6 +1,8 @@
 package com.slg.matchbook.storage;
 
 import com.slg.matchbook.*;
+import com.slg.matchbook.io.MatchYamlCodec;
+import com.slg.matchbook.model.MatchDocument;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
@@ -22,8 +24,8 @@ public final class YamlMatchRepository implements MatchRepository {
     @Override public void shutdown() {}
 
     @Override
-    public void saveMatch(MatchSession session, String result) throws IOException {
-        storage.saveMatchYaml(session, result);
+    public void saveMatch(MatchDocument doc) throws IOException {
+        storage.saveMatchYaml(doc);
     }
 
     @Override

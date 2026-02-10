@@ -1,6 +1,8 @@
 package com.slg.matchbook.storage;
 
 import com.slg.matchbook.MatchSession;
+import com.slg.matchbook.io.MatchYamlCodec;
+import com.slg.matchbook.model.MatchDocument;
 import com.slg.matchbook.MatchStorage;
 import com.slg.matchbook.MatchbookPlugin;
 import com.slg.matchbook.UserMatchIndex;
@@ -124,16 +126,16 @@ public final class MySqlMatchRepository implements MatchRepository {
     }
 
     @Override
-    public void saveMatch(MatchSession session, String result) throws IOException {
+    public void saveMatch(MatchDocument doc) throws IOException {
         if (ds == null) throw new IOException("MySQL pool not initialized");
 
         // Build YAML document exactly like YAML mode
-        String yamlText = buildYamlText(session, result);
+        String yamlText = MatchYamlCodec.toYamlString(doc);
 
         String matches = prefix + "matches";
         String pidx = prefix + "player_matches";
 
-        long endUnix = session.endUnix != null ? session.endUnix : (System.currentTimeMillis() / 1000L);
+        long endUnix = doc.endUnix();
 
         try (Connection c = ds.getConnection()) {
             c.setAutoCommit(false);
@@ -142,11 +144,11 @@ public final class MySqlMatchRepository implements MatchRepository {
                     "INSERT INTO `" + matches + "` (match_id, start_unix, end_unix, arena, result, yaml) "
                             + "VALUES (?,?,?,?,?,?) "
                             + "ON DUPLICATE KEY UPDATE end_unix=VALUES(end_unix), result=VALUES(result), yaml=VALUES(yaml)")) {
-                ps.setString(1, session.matchId);
-                ps.setLong(2, session.startUnix);
+                ps.setString(1, doc.matchId());
+                ps.setLong(2, doc.startUnix());
                 ps.setLong(3, endUnix);
-                ps.setString(4, session.arenaName);
-                ps.setString(5, result != null ? result : "UNKNOWN");
+                ps.setString(4, doc.arenaName());
+                ps.setString(5, doc.result() != null ? doc.result() : "UNKNOWN");
                 ps.setString(6, yamlText);
                 ps.executeUpdate();
             }
@@ -154,11 +156,12 @@ public final class MySqlMatchRepository implements MatchRepository {
             try (PreparedStatement ps = c.prepareStatement(
                     "INSERT INTO `" + pidx + "` (player_uuid, match_id, username, team) VALUES (?,?,?,?) "
                             + "ON DUPLICATE KEY UPDATE username=VALUES(username), team=VALUES(team)")) {
-                for (UUID u : session.getParticipants()) {
+                for (UUID u : doc.participants()) {
+                    MatchDocument.PlayerEntry e = doc.players().get(u);
                     ps.setString(1, u.toString());
-                    ps.setString(2, session.matchId);
-                    ps.setString(3, session.getUsername(u));
-                    var t = session.getTeam(u);
+                    ps.setString(2, doc.matchId());
+                    ps.setString(3, e != null ? e.username() : null);
+                    var t = e != null ? e.team() : null;
                     ps.setString(4, t != null ? t.name() : null);
                     ps.addBatch();
                 }

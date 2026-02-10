@@ -1,6 +1,7 @@
 package com.slg.matchbook;
 
 import com.slg.matchbook.io.MatchYamlCodec;
+import com.slg.matchbook.model.MatchDocument;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
@@ -31,14 +32,14 @@ public final class MatchStorage {
         return folder;
     }
 
-    public void saveMatchYaml(MatchSession session, String result) {
-        File dayFolder = getDayFolder(new Date(session.startUnix * 1000L));
+    public void saveMatchYaml(MatchDocument doc) {
+        File dayFolder = getDayFolder(new Date(doc.startUnix() * 1000L));
 
-        String md5 = md5Hex(session.arenaName);
-        String fileName = session.startUnix + "-" + md5 + ".yml";
+        String md5 = md5Hex(doc.arenaName());
+        String fileName = doc.startUnix() + "-" + md5 + ".yml";
         File outFile = new File(dayFolder, fileName);
 
-        YamlConfiguration yml = MatchYamlCodec.toYaml(session, result);
+        YamlConfiguration yml = MatchYamlCodec.toYaml(doc);
 
         try {
             yml.save(outFile);
@@ -46,14 +47,19 @@ public final class MatchStorage {
             String relative = outFile.getParentFile().getName() + "/" + outFile.getName();
 
             UserMatchIndex index = new UserMatchIndex(plugin);
-            for (UUID u : session.getParticipants()) {
-                index.addMatchForPlayer(u, session.matchId, relative);
+            for (UUID u : doc.participants()) {
+                index.addMatchForPlayer(u, doc.matchId(), relative);
             }
 
             plugin.getLogger().info("Matchbook: wrote match file: " + outFile.getAbsolutePath());
         } catch (IOException e) {
             plugin.getLogger().severe("Failed to save match file " + outFile.getAbsolutePath() + ": " + e.getMessage());
         }
+    }
+
+    /** Backwards-compatible helper. */
+    public void saveMatchYaml(MatchSession session, String result) {
+        saveMatchYaml(MatchDocument.fromSession(session, result));
     }
 
     public static String matchIdFrom(long startUnix, String md5FromFilename) {

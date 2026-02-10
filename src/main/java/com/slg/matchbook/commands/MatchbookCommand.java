@@ -35,6 +35,8 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
     private static final String PERM_EXPORT = "mb.command.export";
     private static final String PERM_MIGRATE = "mb.command.migrate";
     private static final String PERM_HELP = "mb.command.help";
+    private static final String PERM_RELOAD = "mb.command.reload";
+    private static final String PERM_STATSKEYS = "mb.command.statskeys";
 
     private final MatchbookPlugin plugin;
     private final MatchExporter exporter;
@@ -159,29 +161,42 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                     return true;
                 }
 
-                try {
-                    File outFile;
+                sender.sendMessage(ChatColor.GRAY + "Exporting... (this runs async)");
 
-                    if (matchCodes.size() == 1) {
-                        outFile = exporter.exportMatchToCsv(matchCodes.get(0));
-                        if (outFile == null) {
-                            sender.sendMessage(ChatColor.RED + "Match not found: " + matchCodes.get(0));
-                            return true;
+                org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    try {
+                        File outFile;
+                        if (matchCodes.size() == 1) {
+                            outFile = exporter.exportMatchToCsv(matchCodes.get(0));
+                            if (outFile == null) {
+                                org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
+                                        sender.sendMessage(ChatColor.RED + "Match not found: " + matchCodes.get(0))
+                                );
+                                return;
+                            }
+                            File finalOutFile = outFile;
+                            org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                                sender.sendMessage(ChatColor.GREEN + "Exported match " + ChatColor.WHITE + matchCodes.get(0));
+                                sender.sendMessage(ChatColor.GRAY + "Saved to: " + finalOutFile.getAbsolutePath());
+                            });
+                        } else {
+                            outFile = exporter.exportMatchesCombinedToCsv(matchCodes);
+                            File finalOutFile1 = outFile;
+                            org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                                sender.sendMessage(ChatColor.GREEN + "Exported combined CSV for "
+                                        + ChatColor.WHITE + matchCodes.size()
+                                        + ChatColor.GREEN + " matches.");
+                                sender.sendMessage(ChatColor.GRAY + "Saved to: " + finalOutFile1.getAbsolutePath());
+                            });
                         }
-                        sender.sendMessage(ChatColor.GREEN + "Exported match " + ChatColor.WHITE + matchCodes.get(0));
-                    } else {
-                        outFile = exporter.exportMatchesCombinedToCsv(matchCodes);
-                        sender.sendMessage(ChatColor.GREEN + "Exported combined CSV for "
-                                + ChatColor.WHITE + matchCodes.size()
-                                + ChatColor.GREEN + " matches.");
+                    } catch (Exception e) {
+                        org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                            sender.sendMessage(ChatColor.RED + "Export failed: " + e.getMessage());
+                        });
+                        plugin.getLogger().severe("Export failed: " + e.getMessage());
+                        e.printStackTrace();
                     }
-
-                    sender.sendMessage(ChatColor.GRAY + "Saved to: " + outFile.getAbsolutePath());
-                } catch (Exception e) {
-                    sender.sendMessage(ChatColor.RED + "Export failed: " + e.getMessage());
-                    plugin.getLogger().severe("Export failed: " + e.getMessage());
-                    e.printStackTrace();
-                }
+                });
 
                 return true;
             }
@@ -226,6 +241,64 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
 
+            case "reload" -> {
+                if (!canAdmin(sender, PERM_RELOAD) && !sender.hasPermission("matchbook.admin")) {
+                    deny(sender);
+                    return true;
+                }
+                plugin.reloadMatchbook();
+                sender.sendMessage(ChatColor.GREEN + "Matchbook config reloaded.");
+                if (plugin.getSettings() != null) {
+                    sender.sendMessage(ChatColor.GRAY + "Tracked keys: " + ChatColor.WHITE + String.join(", ", plugin.getSettings().trackedKeys()));
+                }
+                return true;
+            }
+
+            case "statskeys", "discover", "discoverstats" -> {
+                if (!canAdmin(sender, PERM_STATSKEYS) && !sender.hasPermission("matchbook.admin")) {
+                    deny(sender);
+                    return true;
+                }
+                if (!(sender instanceof Player p)) {
+                    sender.sendMessage(ChatColor.RED + "This command can only be used in-game.");
+                    return true;
+                }
+
+                String targetName = args.length >= 2 ? args[1] : p.getName();
+                Player target = plugin.getServer().getPlayerExact(targetName);
+                if (target == null) {
+                    sender.sendMessage(ChatColor.RED + "Player not online: " + ChatColor.WHITE + targetName);
+                    return true;
+                }
+
+                // Async callback from MBedwars; bounce results to main thread.
+                de.marcely.bedwars.api.BedwarsAPI.getPlayerDataAPI().getStats(target.getUniqueId(), statsObj -> {
+                    var chosen = com.slg.matchbook.service.BedwarsStatsAdapter.pickBest(statsObj);
+                    java.util.Set<String> keys = com.slg.matchbook.util.StatsKeyDiscovery.discoverKeys(chosen);
+
+                    plugin.getServer().getScheduler().runTask(plugin, () -> {
+                        sender.sendMessage(ChatColor.YELLOW + "Discovered " + keys.size() + " stat keys for " + ChatColor.WHITE + target.getName());
+                        if (keys.isEmpty()) {
+                            sender.sendMessage(ChatColor.GRAY + "Could not enumerate keys from this MBedwars version. You can still try known keys like bedwars:kills, bedwars:deaths, bedwars:wins, bedwars:loses, bedwars:final_kills, bedwars:final_deaths.");
+                        } else {
+                            // Split lines to avoid chat limit.
+                            StringBuilder line = new StringBuilder(ChatColor.GRAY.toString());
+                            for (String k : keys) {
+                                if (line.length() + k.length() + 2 > 200) {
+                                    sender.sendMessage(line.toString());
+                                    line = new StringBuilder(ChatColor.GRAY.toString());
+                                }
+                                if (line.length() > 2) line.append(ChatColor.DARK_GRAY).append(", ").append(ChatColor.GRAY);
+                                line.append(k);
+                            }
+                            if (!line.isEmpty()) sender.sendMessage(line.toString());
+                        }
+                    });
+                });
+
+                return true;
+            }
+
             default -> {
                 sender.sendMessage(ChatColor.RED + "Unknown subcommand. Try: /" + label + " help");
                 return true;
@@ -248,6 +321,8 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
             if (canDefault(sender, PERM_VIEW)) subs.add("view");
             if (canDefault(sender, PERM_EXPORT)) subs.add("export");
             if (canAdmin(sender, PERM_MIGRATE) || sender.hasPermission("matchbook.migrate") || sender.hasPermission("matchbook.admin")) subs.add("migrate");
+            if (canAdmin(sender, PERM_RELOAD) || sender.hasPermission("matchbook.admin")) subs.add("reload");
+            if (canAdmin(sender, PERM_STATSKEYS)) subs.add("statskeys");
 
             return filterPrefix(subs, partial);
         }
@@ -258,6 +333,13 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
 
             if (sub.equals("migrate")) {
                 return filterPrefix(List.of("yaml2mysql", "mysql2yaml", "--dry-run"), partial);
+            }
+
+            if (sub.equals("statskeys")) {
+                // Suggest online player names
+                List<String> names = new ArrayList<>();
+                for (Player p : plugin.getServer().getOnlinePlayers()) names.add(p.getName());
+                return filterPrefix(names, partial);
             }
 
             if (sub.equals("view") || sub.equals("export")) {
@@ -306,6 +388,16 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
         }
         if (canAdmin(sender, PERM_MIGRATE) || sender.hasPermission("matchbook.migrate") || sender.hasPermission("matchbook.admin")) {
             sender.sendMessage(ChatColor.GRAY + " - /" + label + " migrate yaml2mysql|mysql2yaml [--dry-run]" + ChatColor.DARK_GRAY + "  (admin)");
+            any = true;
+        }
+
+        if (canAdmin(sender, PERM_RELOAD) || sender.hasPermission("matchbook.admin")) {
+            sender.sendMessage(ChatColor.GRAY + " - /" + label + " reload" + ChatColor.DARK_GRAY + "  (reload config.yml)");
+            any = true;
+        }
+
+        if (canAdmin(sender, PERM_STATSKEYS)) {
+            sender.sendMessage(ChatColor.GRAY + " - /" + label + " statskeys [player]" + ChatColor.DARK_GRAY + "  (discover stat keys)");
             any = true;
         }
 

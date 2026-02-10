@@ -1,11 +1,13 @@
 package com.slg.matchbook;
 
 import com.slg.matchbook.commands.MatchbookCommand;
+import com.slg.matchbook.config.RuntimeSettings;
 import com.slg.matchbook.config.StorageType;
 import com.slg.matchbook.gui.MatchesDetailsGui;
 import com.slg.matchbook.gui.MatchesGui;
 import com.slg.matchbook.placeholders.MatchbookExpansion;
 import com.slg.matchbook.storage.MatchRepository;
+import com.slg.matchbook.service.MatchLifecycleService;
 import de.marcely.bedwars.api.BedwarsAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -19,9 +21,11 @@ public final class MatchbookPlugin extends JavaPlugin {
     }
 
     private com.slg.matchbook.config.MatchbookConfig config;
+    private volatile RuntimeSettings settings;
     private MatchRepository repo;
 
     private MatchStorage storage;
+    private MatchLifecycleService lifecycle;
     private MatchbookListener listener;
         private MatchesDetailsGui detailsGui;
         private MatchesGui matchesGui;
@@ -41,6 +45,18 @@ public final class MatchbookPlugin extends JavaPlugin {
         return config;
     }
 
+    public RuntimeSettings getSettings() {
+        return settings;
+    }
+
+    /**
+     * Reloads config and runtime settings. Safe to call from main thread.
+     */
+    public void reloadMatchbook() {
+        this.config.load();
+        this.settings = config.runtimeSettings();
+    }
+
     public File getAddonDataFolder() {
         return addonDataFolder != null ? addonDataFolder : getDataFolder();
     }
@@ -53,7 +69,7 @@ public final class MatchbookPlugin extends JavaPlugin {
         }
 
         this.config = new com.slg.matchbook.config.MatchbookConfig(this);
-        this.config.load();
+        reloadMatchbook();
 
         StorageType type = config.storageType();
         if (type == StorageType.MYSQL) this.repo = new com.slg.matchbook.storage.MySqlMatchRepository(this, config.raw());
@@ -70,7 +86,8 @@ public final class MatchbookPlugin extends JavaPlugin {
         this.storage = new MatchStorage(this);
 
         BedwarsAPI.onReady(() -> {
-            this.listener = new MatchbookListener(this, storage);
+            this.lifecycle = new MatchLifecycleService(this);
+            this.listener = new MatchbookListener(this, lifecycle);
             Bukkit.getPluginManager().registerEvents(listener, this);
 
             // GUI
@@ -102,9 +119,7 @@ public final class MatchbookPlugin extends JavaPlugin {
     public void onDisable() {
         if (repo != null) repo.shutdown();
 
-        if (listener != null) {
-            listener.flushAll("plugin-disable");
-        }
+        if (lifecycle != null) lifecycle.flushAll("plugin-disable");
     }
 
     /**

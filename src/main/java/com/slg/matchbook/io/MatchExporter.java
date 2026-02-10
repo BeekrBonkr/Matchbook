@@ -36,40 +36,21 @@ public final class MatchExporter {
 
         File outFile = new File(exportsDir, matchCode + ".csv");
 
+        List<String> columns = resolveColumns();
+
         try (Writer writer = new OutputStreamWriter(new FileOutputStream(outFile), StandardCharsets.UTF_8);
              PrintWriter out = new PrintWriter(writer)) {
 
             // Top: match codes used
             out.println("# match_codes: " + matchCode);
 
-            // Header exactly as requested
-            out.println("uuid,username,team,kills,final_kills,final_deaths,beds_destroyed,wins,loses");
+            out.println(String.join(",", headerForColumns(columns)));
 
             List<String> participants = yml.getStringList("match.participants");
             for (String uuidStr : participants) {
                 String base = "players." + uuidStr;
 
-                String username = yml.getString(base + ".username", "");
-                String team = yml.getString(base + ".team", "");
-
-                long kills = yml.getLong(base + ".diff.bedwars:kills", 0L);
-                long fk = yml.getLong(base + ".diff.bedwars:final_kills", 0L);
-                long fd = yml.getLong(base + ".diff.bedwars:final_deaths", 0L);
-                long beds = yml.getLong(base + ".diff.bedwars:beds_destroyed", 0L);
-                long wins = yml.getLong(base + ".diff.bedwars:wins", 0L);
-                long loses = yml.getLong(base + ".diff.bedwars:loses", 0L);
-
-                out.println(String.join(",",
-                        csv(uuidStr),
-                        csv(username),
-                        csv(team),
-                        Long.toString(kills),
-                        Long.toString(fk),
-                        Long.toString(fd),
-                        Long.toString(beds),
-                        Long.toString(wins),
-                        Long.toString(loses)
-                ));
+                out.println(String.join(",", rowForColumns(columns, yml, uuidStr)));
             }
         }
 
@@ -116,6 +97,9 @@ public final class MatchExporter {
 
         File outFile = new File(exportsDir, safeName + ".csv");
 
+        List<String> columns = resolveColumns();
+        List<String> statColumns = columns.stream().filter(MatchExporter::isStatKey).toList();
+
         // Aggregate by UUID
         Map<String, AggRow> rows = new LinkedHashMap<>();
 
@@ -128,30 +112,19 @@ public final class MatchExporter {
                 String username = yml.getString(base + ".username", "");
                 String team = yml.getString(base + ".team", "");
 
-                long kills = yml.getLong(base + ".diff.bedwars:kills", 0L);
-                long fk = yml.getLong(base + ".diff.bedwars:final_kills", 0L);
-                long fd = yml.getLong(base + ".diff.bedwars:final_deaths", 0L);
-                long beds = yml.getLong(base + ".diff.bedwars:beds_destroyed", 0L);
-                long wins = yml.getLong(base + ".diff.bedwars:wins", 0L);
-                long loses = yml.getLong(base + ".diff.bedwars:loses", 0L);
-
                 AggRow row = rows.computeIfAbsent(uuidStr, AggRow::new);
 
-                // username: keep latest non-empty seen
                 if (username != null && !username.isBlank()) row.username = username;
 
-                // team: if multiple different non-empty teams appear, mark MIXED
                 if (team != null && !team.isBlank()) {
                     if (row.team == null || row.team.isBlank()) row.team = team;
                     else if (!row.team.equalsIgnoreCase(team)) row.team = "MIXED";
                 }
 
-                row.kills += kills;
-                row.finalKills += fk;
-                row.finalDeaths += fd;
-                row.bedsDestroyed += beds;
-                row.wins += wins;
-                row.loses += loses;
+                for (String key : statColumns) {
+                    long v = yml.getLong(base + ".diff." + key, 0L);
+                    row.stats.merge(key, v, Long::sum);
+                }
             }
         }
 
@@ -161,22 +134,9 @@ public final class MatchExporter {
             // Top: list match codes used
             out.println("# match_codes: " + String.join(", ", matchCodes));
 
-            // Header exactly as requested
-            out.println("uuid,username,team,kills,final_kills,final_deaths,beds_destroyed,wins,loses");
+            out.println(String.join(",", headerForColumns(columns)));
 
-            for (AggRow r : rows.values()) {
-                out.println(String.join(",",
-                        csv(r.uuid),
-                        csv(r.username != null ? r.username : ""),
-                        csv(r.team != null ? r.team : ""),
-                        Long.toString(r.kills),
-                        Long.toString(r.finalKills),
-                        Long.toString(r.finalDeaths),
-                        Long.toString(r.bedsDestroyed),
-                        Long.toString(r.wins),
-                        Long.toString(r.loses)
-                ));
-            }
+            for (AggRow r : rows.values()) out.println(String.join(",", rowForColumns(columns, r)));
         }
 
         return outFile;
@@ -189,18 +149,95 @@ public final class MatchExporter {
         return needsQuotes ? ("\"" + cleaned + "\"") : cleaned;
     }
 
+    private List<String> resolveColumns() {
+        var settings = plugin.getSettings();
+        List<String> fromConfig = settings != null && settings.export() != null ? settings.export().columns() : null;
+        if (fromConfig != null && !fromConfig.isEmpty()) return fromConfig;
+
+        // Smart default: uuid, username, team + tracked_keys
+        List<String> out = new ArrayList<>();
+        out.add("uuid");
+        out.add("username");
+        out.add("team");
+        List<String> tracked = settings != null ? settings.trackedKeys() : plugin.getMatchbookConfig().trackedKeys();
+        if (tracked != null) out.addAll(tracked);
+        return out;
+    }
+
+    private static boolean isMeta(String col) {
+        if (col == null) return false;
+        String c = col.toLowerCase(Locale.ROOT);
+        return c.equals("uuid") || c.equals("username") || c.equals("team");
+    }
+
+    private static boolean isStatKey(String col) {
+        return col != null && !isMeta(col);
+    }
+
+    private static List<String> headerForColumns(List<String> columns) {
+        List<String> out = new ArrayList<>();
+        for (String c : columns) {
+            if (c == null) continue;
+            String col = c.trim();
+            if (col.isEmpty()) continue;
+            if (isMeta(col)) {
+                out.add(col.toLowerCase(Locale.ROOT));
+            } else {
+                out.add(simplifyStatKey(col));
+            }
+        }
+        return out;
+    }
+
+    private static String simplifyStatKey(String key) {
+        if (key == null) return "";
+        int idx = key.indexOf(':');
+        return idx >= 0 && idx + 1 < key.length() ? key.substring(idx + 1) : key;
+    }
+
+    private static List<String> rowForColumns(List<String> columns, YamlConfiguration yml, String uuidStr) {
+        String base = "players." + uuidStr;
+        List<String> out = new ArrayList<>();
+        for (String c : columns) {
+            if (c == null) continue;
+            String col = c.trim();
+            if (col.isEmpty()) continue;
+            switch (col.toLowerCase(Locale.ROOT)) {
+                case "uuid" -> out.add(csv(uuidStr));
+                case "username" -> out.add(csv(yml.getString(base + ".username", "")));
+                case "team" -> out.add(csv(yml.getString(base + ".team", "")));
+                default -> {
+                    long v = yml.getLong(base + ".diff." + col, 0L);
+                    out.add(Long.toString(v));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static List<String> rowForColumns(List<String> columns, AggRow r) {
+        List<String> out = new ArrayList<>();
+        for (String c : columns) {
+            if (c == null) continue;
+            String col = c.trim();
+            if (col.isEmpty()) continue;
+            switch (col.toLowerCase(Locale.ROOT)) {
+                case "uuid" -> out.add(csv(r.uuid));
+                case "username" -> out.add(csv(r.username != null ? r.username : ""));
+                case "team" -> out.add(csv(r.team != null ? r.team : ""));
+                default -> out.add(Long.toString(r.stats.getOrDefault(col, 0L)));
+            }
+        }
+        return out;
+    }
+
     private static final class AggRow {
         final String uuid;
 
         String username;
         String team;
 
-        long kills;
-        long finalKills;
-        long finalDeaths;
-        long bedsDestroyed;
-        long wins;
-        long loses;
+        final Map<String, Long> stats = new LinkedHashMap<>();
 
         AggRow(String uuid) {
             this.uuid = uuid;

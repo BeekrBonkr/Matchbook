@@ -1,5 +1,5 @@
 # Do not change this!!!
-config-version: "0.0.1"
+config-version: "0.0.3"
 
 # Matchbook configuration
 
@@ -44,11 +44,24 @@ match:
   tracked_keys:
     - "bedwars:kills"
     - "bedwars:final_kills"
+    - "bedwars:deaths"
     - "bedwars:final_deaths"
     - "bedwars:beds_destroyed"
     - "bedwars:wins"
     - "bedwars:loses"
     - "bedwars:beds_lost"
+
+# CSV export settings
+# If export.columns is omitted/empty, Matchbook will default to: uuid, username, team + match.tracked_keys
+export:
+  # Example:
+  # columns:
+  #   - uuid
+  #   - username
+  #   - team
+  #   - bedwars:kills
+  #   - bedwars:deaths
+  columns: []
 
 logging:
   debug: false

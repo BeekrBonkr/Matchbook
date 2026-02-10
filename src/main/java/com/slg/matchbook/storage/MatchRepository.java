@@ -1,6 +1,7 @@
 package com.slg.matchbook.storage;
 
 import com.slg.matchbook.MatchSession;
+import com.slg.matchbook.model.MatchDocument;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
@@ -13,8 +14,17 @@ public interface MatchRepository {
     void init() throws Exception;
     void shutdown();
 
-    // Save a match from the in-memory session + result string ("WIN:RED" / "TIE")
-    void saveMatch(MatchSession session, String result) throws IOException;
+    /**
+     * Save a match document to the configured backend.
+     */
+    void saveMatch(MatchDocument doc) throws IOException;
+
+    /**
+     * Back-compat convenience for in-memory sessions.
+     */
+    default void saveMatch(MatchSession session, String result) throws IOException {
+        saveMatch(MatchDocument.fromSession(session, result));
+    }
 
     // Used by exporter/GUI
     File findMatchFileById(String matchId);              // YAML mode returns actual file; MySQL mode can return null

@@ -65,3 +65,10 @@ export:
 
 logging:
   debug: false
+
+# Rejoin-memory can block players from joining other arenas while their old match is still running.
+# Matchbook can force-disable rejoin when players leave/teleport/switch arenas.
+rejoin:
+  disable_on_leave: true
+  disable_on_teleport: true
+  disable_on_switch_arena: true

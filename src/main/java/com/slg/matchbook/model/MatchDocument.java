@@ -55,14 +55,21 @@ public record MatchDocument(
 
             StatSnapshot startSnap = session.getStart(u);
             StatSnapshot endSnap = session.getEnd(u);
+            StatSnapshot matchSnap = session.getMatchStats(u);
 
             Map<String, Long> start = startSnap != null ? new LinkedHashMap<>(startSnap.values()) : null;
             Map<String, Long> end = endSnap != null ? new LinkedHashMap<>(endSnap.values()) : null;
 
             Map<String, Long> diff = null;
-            if (startSnap != null && endSnap != null) {
-                diff = new LinkedHashMap<>(StatSnapshot.diff(startSnap, endSnap));
 
+            // Prefer per-match stats (game stats / quit memories) when available.
+            if (matchSnap != null) {
+                diff = new LinkedHashMap<>(matchSnap.values());
+            } else if (startSnap != null && endSnap != null) {
+                diff = new LinkedHashMap<>(StatSnapshot.diff(startSnap, endSnap));
+            }
+
+            if (diff != null) {
                 // Clamp negative diffs, annotate warning
                 for (String key : new ArrayList<>(diff.keySet())) {
                     long v = diff.getOrDefault(key, 0L);
@@ -72,7 +79,7 @@ public record MatchDocument(
                     }
                 }
 
-                // Win/loss enforcement (same as codec previously)
+                // Win/loss enforcement
                 if (!tie && winningTeam != null && team != null) {
                     long winsDiff = diff.getOrDefault("bedwars:wins", 0L);
                     long losesDiff = diff.getOrDefault("bedwars:loses", 0L);

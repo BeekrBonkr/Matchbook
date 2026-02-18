@@ -91,13 +91,14 @@ public final class MySqlMatchRepository implements MatchRepository {
     private void ensureSchema() throws SQLException {
         String matches = prefix + "matches";
         String pidx = prefix + "player_matches";
+        final int desiredMatchIdLen = 16; // short match codes; keep a little headroom
 
         try (Connection c = ds.getConnection();
              Statement st = c.createStatement()) {
 
             st.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS `" + matches + "` ("
-                            + "`match_id` VARCHAR(32) NOT NULL,"
+                            + "`match_id` VARCHAR(" + desiredMatchIdLen + ") NOT NULL,"
                             + "`start_unix` BIGINT NOT NULL,"
                             + "`end_unix` BIGINT NOT NULL,"
                             + "`arena` VARCHAR(128) NOT NULL,"
@@ -113,7 +114,7 @@ public final class MySqlMatchRepository implements MatchRepository {
             st.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS `" + pidx + "` ("
                             + "`player_uuid` CHAR(36) NOT NULL,"
-                            + "`match_id` VARCHAR(32) NOT NULL,"
+                            + "`match_id` VARCHAR(" + desiredMatchIdLen + ") NOT NULL,"
                             + "`username` VARCHAR(16) NULL,"
                             + "`team` VARCHAR(16) NULL,"
                             + "PRIMARY KEY (`player_uuid`, `match_id`),"
@@ -122,6 +123,40 @@ public final class MySqlMatchRepository implements MatchRepository {
                             + " REFERENCES `" + matches + "`(`match_id`) ON DELETE CASCADE"
                             + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
             );
+
+            // If the tables already existed from an older version, ensure the match_id column is wide enough.
+            // This prevents "Data too long for column 'match_id'" when upgrading.
+            ensureColumnLengthAtLeast(c, matches, "match_id", desiredMatchIdLen);
+            ensureColumnLengthAtLeast(c, pidx, "match_id", desiredMatchIdLen);
+        }
+    }
+
+    private void ensureColumnLengthAtLeast(Connection c, String table, String column, int minLen) {
+        try {
+            // INFORMATION_SCHEMA is available on MySQL/MariaDB.
+            try (PreparedStatement ps = c.prepareStatement(
+                    "SELECT CHARACTER_MAXIMUM_LENGTH " +
+                            "FROM INFORMATION_SCHEMA.COLUMNS " +
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?")) {
+                ps.setString(1, table);
+                ps.setString(2, column);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) return;
+                    long len = rs.getLong(1);
+                    if (len >= minLen) return;
+                }
+            }
+
+            try (Statement st = c.createStatement()) {
+                st.executeUpdate("ALTER TABLE `" + table + "` MODIFY `" + column + "` VARCHAR(" + minLen + ") NOT NULL");
+            }
+
+            plugin.getLogger().info("Matchbook: widened " + table + "." + column + " to VARCHAR(" + minLen + ")");
+        } catch (Throwable t) {
+            // Non-fatal; creation may still work. We'll log at debug level to avoid scaring admins.
+            if (plugin.getConfig().getBoolean("debug", false)) {
+                plugin.getLogger().warning("Matchbook: could not verify/alter column length for " + table + "." + column + ": " + t.getMessage());
+            }
         }
     }
 

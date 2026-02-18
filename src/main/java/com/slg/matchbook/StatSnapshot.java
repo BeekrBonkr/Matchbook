@@ -51,6 +51,13 @@ public final class StatSnapshot {
         return new StatSnapshot(m);
     }
 
+    public boolean anyNonZero() {
+        for (Long v : values.values()) {
+            if (v != null && v != 0L) return true;
+        }
+        return false;
+    }
+
     public static Map<String, Long> diff(StatSnapshot start, StatSnapshot end) {
         Map<String, Long> out = new LinkedHashMap<>();
         if (start == null || end == null) return out;

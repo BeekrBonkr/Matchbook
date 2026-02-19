@@ -1,5 +1,5 @@
 # Do not change this!!!
-config-version: "0.0.3"
+config-version: "0.0.5"
 
 # Matchbook configuration
 
@@ -62,6 +62,21 @@ export:
   #   - bedwars:kills
   #   - bedwars:deaths
   columns: []
+
+# Upload CSV exports to Pastebin so players don't have to find files on disk
+export_upload:
+  enabled: false
+  # Paste title prefix
+  paste_name_prefix: "Matchbook Export"
+  # 0=public, 1=unlisted (recommended)
+  unlisted: true
+  # Paste expiry: N (never), 10M, 1H, 1D, 1W, 2W, 1M, 6M, 1Y
+  expire: "1W"
+  pastebin:
+    api_dev_key: ""
+    # Optional: create pastes under a Pastebin account (requires generating an api_user_key)
+    api_user_key: ""
+
 
 logging:
   debug: false

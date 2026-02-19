@@ -13,11 +13,37 @@ import java.util.concurrent.atomic.LongAdder;
 public final class MatchSession {
 
     public final String arenaName;
-    public final long startUnix;
+    /**
+     * Start timestamp in unix seconds.
+     *
+     * NOTE: This is mutable because we may create a session early (e.g., when the first player joins)
+     * so placeholders can resolve during pre-round phases, then overwrite the start time when the
+     * round actually begins.
+     */
+    public volatile long startUnix;
     public volatile Long endUnix = null;
     public final String matchId;
 
     public final Set<de.marcely.bedwars.api.arena.Team> bedLostTeams = new HashSet<>();
+
+    // ---------------------------
+    // Placement tracking
+    // ---------------------------
+
+    /** Teams that participated in this match (derived from player membership). */
+    public final Set<Team> participatingTeams = new HashSet<>();
+
+    /**
+     * Alive players (by UUID) per team. Players are removed on fatal (final) death.
+     * This is only used for placement detection.
+     */
+    public final ConcurrentMap<Team, Set<UUID>> alivePlayersByTeam = new ConcurrentHashMap<>();
+
+    /** Team -> placement rank (1 = 1st, 2 = 2nd, ...). */
+    public final ConcurrentMap<Team, Integer> placementByTeam = new ConcurrentHashMap<>();
+
+    /** Elimination order of teams (first eliminated first). */
+    public final java.util.List<Team> eliminationOrder = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
     // Debug/proof of timing
     public volatile Long startSnapshotTakenUnix = null;
@@ -180,5 +206,81 @@ public final class MatchSession {
 
     public Long getStartTakenUnix(UUID uuid) {
         return startTakenUnixByPlayer.get(uuid);
+    }
+
+    // ----------------------------------------------------------------------
+    // Placement helpers
+    // ----------------------------------------------------------------------
+
+    public void markTeamParticipating(Team team) {
+        if (team == null) return;
+        participatingTeams.add(team);
+    }
+
+    public void markPlayerAlive(Team team, UUID uuid) {
+        if (team == null || uuid == null) return;
+        participatingTeams.add(team);
+        alivePlayersByTeam
+                .computeIfAbsent(team, __ -> java.util.concurrent.ConcurrentHashMap.newKeySet())
+                .add(uuid);
+    }
+
+    public void markPlayerFinalDead(Team team, UUID uuid) {
+        if (team == null || uuid == null) return;
+        Set<UUID> alive = alivePlayersByTeam.get(team);
+        if (alive != null) alive.remove(uuid);
+    }
+
+    public boolean isTeamFullyDead(Team team) {
+        Set<UUID> alive = alivePlayersByTeam.get(team);
+        return alive == null || alive.isEmpty();
+    }
+
+    public int totalTeams() {
+        return Math.max(0, participatingTeams.size());
+    }
+
+    /**
+     * Records a placement for a team if not already recorded.
+     */
+    public void setPlacementIfAbsent(Team team, int place) {
+        if (team == null || place <= 0) return;
+        placementByTeam.putIfAbsent(team, place);
+    }
+
+    /**
+     * Writes one-hot placement keys into matchStats for each participant.
+     *
+     * Keys are stored as:
+     *   matchbook:1st_place, matchbook:2nd_place, ...
+     *
+     * This makes CSV multi-export aggregation "just work" by summation.
+     */
+    public void applyPlacementsToMatchStats() {
+        if (placementByTeam.isEmpty()) return;
+
+        for (UUID uuid : participants) {
+            Team t = teamByPlayer.get(uuid);
+            if (t == null) continue;
+            Integer place = placementByTeam.get(t);
+            if (place == null || place <= 0) continue;
+
+            String key = "matchbook:" + ordinal(place) + "_place";
+            StatSnapshot existing = matchStats.get(uuid);
+            var out = existing != null ? new java.util.LinkedHashMap<>(existing.values()) : new java.util.LinkedHashMap<String, Long>();
+            out.put(key, out.getOrDefault(key, 0L) + 1L);
+            matchStats.put(uuid, new StatSnapshot(out));
+        }
+    }
+
+    private static String ordinal(int n) {
+        int mod100 = n % 100;
+        if (mod100 >= 11 && mod100 <= 13) return n + "th";
+        return switch (n % 10) {
+            case 1 -> n + "st";
+            case 2 -> n + "nd";
+            case 3 -> n + "rd";
+            default -> n + "th";
+        };
     }
 }

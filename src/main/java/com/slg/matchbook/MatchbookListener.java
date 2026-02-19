@@ -17,6 +17,8 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 
+import java.util.Collection;
+
 /**
  * Bridges MBedwars events to the lifecycle service.
  */
@@ -98,7 +100,15 @@ public final class MatchbookListener implements Listener {
         if (e.getResult() != ArenaBedBreakEvent.Result.CANCEL && e.isPlayerCaused()) {
             Player p = e.getPlayer();
             if (p != null) {
-                lifecycle.onBedBreak(e.getArena(), p);
+                // Also try to determine WHICH team's bed was broken for placement tracking.
+                // Different MBedwars versions expose different method names, so use reflection.
+                de.marcely.bedwars.api.arena.Team bedTeam = null;
+                try {
+                    var m = e.getClass().getMethod("getTeam");
+                    Object o = m.invoke(e);
+                    if (o instanceof de.marcely.bedwars.api.arena.Team t) bedTeam = t;
+                } catch (Throwable ignored) {}
+                lifecycle.onBedBreak(e.getArena(), p, bedTeam);
             }
         }
     }
@@ -112,9 +122,52 @@ public final class MatchbookListener implements Listener {
         if (player == null) return "";
 
         Arena arena = BedwarsAPI.getGameAPI().getArenaByPlayer(player);
+        if (arena == null) {
+            // Try spectator lookup for scoreboards / hubs that show match code while spectating.
+            arena = findArenaBySpectator(player);
+        }
         if (arena == null) return "";
 
         MatchSession session = lifecycle.getSession(arena.getName());
         return session != null ? session.matchId : "";
+    }
+
+    private Arena findArenaBySpectator(Player player) {
+        try {
+            // Newer MBedwars versions
+            var m = BedwarsAPI.getGameAPI().getClass().getMethod("getArenaBySpectator", Player.class);
+            Object o = m.invoke(BedwarsAPI.getGameAPI(), player);
+            if (o instanceof Arena a) return a;
+        } catch (Throwable ignored) {}
+
+        try {
+            // Fallback: iterate arenas and ask if the player is a spectator.
+            var mArenas = BedwarsAPI.getGameAPI().getClass().getMethod("getArenas");
+            Object o = mArenas.invoke(BedwarsAPI.getGameAPI());
+            if (o instanceof Iterable<?> it) {
+                for (Object aObj : it) {
+                    if (!(aObj instanceof Arena a)) continue;
+                    if (isSpectator(a, player)) return a;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        return null;
+    }
+
+    private boolean isSpectator(Arena arena, Player player) {
+        try {
+            var m = arena.getClass().getMethod("isSpectator", Player.class);
+            Object o = m.invoke(arena, player);
+            if (o instanceof Boolean b) return b;
+        } catch (Throwable ignored) {}
+
+        try {
+            var m = arena.getClass().getMethod("getSpectators");
+            Object o = m.invoke(arena);
+            if (o instanceof Collection<?> c) return c.contains(player);
+        } catch (Throwable ignored) {}
+
+        return false;
     }
 }

@@ -137,13 +137,6 @@ public final class MatchesDetailsGui implements Listener {
         String username = yml.getString(base + ".username", uuidStr);
         String team = yml.getString(base + ".team", "");
 
-        long kills = yml.getLong(base + ".diff.bedwars:kills", 0L);
-        long fk = yml.getLong(base + ".diff.bedwars:final_kills", 0L);
-        long fd = yml.getLong(base + ".diff.bedwars:final_deaths", 0L);
-        long beds = yml.getLong(base + ".diff.bedwars:beds_destroyed", 0L);
-        long wins = yml.getLong(base + ".diff.bedwars:wins", 0L);
-        long loses = yml.getLong(base + ".diff.bedwars:loses", 0L);
-
         Material wool = teamWool(team);
 
         ItemStack it = new ItemStack(wool);
@@ -156,16 +149,103 @@ public final class MatchesDetailsGui implements Listener {
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + "UUID: " + ChatColor.DARK_GRAY + uuidStr);
         lore.add("");
-        lore.add(statLine("Kills", kills));
-        lore.add(statLine("Final Kills", fk));
-        lore.add(statLine("Final Deaths", fd));
-        lore.add(statLine("Beds Destroyed", beds));
-        lore.add(statLine("Wins", wins));
-        lore.add(statLine("Losses", loses));
+
+        // Dynamically show any recorded diff keys for this player.
+        // This keeps GUI in sync with whatever Matchbook recorded (and whatever exporters can output).
+        var diffSection = yml.getConfigurationSection(base + ".diff");
+        Map<String, Long> diff = new LinkedHashMap<>();
+        if (diffSection != null) {
+            for (String k : diffSection.getKeys(false)) {
+                diff.put(k, yml.getLong(base + ".diff." + k, 0L));
+            }
+        }
+
+        // Special-case placement: collapse matchbook:*_place one-hot keys into a single friendly line.
+        String placement = resolvePlacementFromDiff(diff);
+        if (placement != null) {
+            lore.add(ChatColor.GRAY + "• " + ChatColor.WHITE + "Placement: " + ChatColor.AQUA + placement);
+        }
+
+        // Preferred ordering for common keys
+        List<String> preferred = List.of(
+                "bedwars:kills",
+                "bedwars:deaths",
+                "bedwars:final_kills",
+                "bedwars:final_deaths",
+                "bedwars:beds_destroyed",
+                "bedwars:wins",
+                "bedwars:loses"
+        );
+
+        Set<String> shown = new HashSet<>();
+        for (String key : preferred) {
+            if (!diff.containsKey(key)) continue;
+            lore.add(statLine(friendlyName(key), diff.getOrDefault(key, 0L)));
+            shown.add(key);
+        }
+
+        // Show any remaining keys (sorted)
+        List<String> remaining = new ArrayList<>(diff.keySet());
+        remaining.removeAll(shown);
+        // Don't show the one-hot placement keys twice.
+        remaining.removeIf(k -> k != null && k.startsWith("matchbook:") && k.endsWith("_place"));
+        remaining.sort(String.CASE_INSENSITIVE_ORDER);
+        for (String key : remaining) {
+            lore.add(statLine(friendlyName(key), diff.getOrDefault(key, 0L)));
+        }
 
         meta.setLore(lore);
         it.setItemMeta(meta);
         return it;
+    }
+
+    private static String resolvePlacementFromDiff(Map<String, Long> diff) {
+        if (diff == null || diff.isEmpty()) return null;
+        // Find a matchbook:*_place key with value > 0
+        for (String k : diff.keySet()) {
+            if (k == null) continue;
+            if (!k.startsWith("matchbook:") || !k.endsWith("_place")) continue;
+            long v = diff.getOrDefault(k, 0L);
+            if (v <= 0L) continue;
+            // key is matchbook:1st_place -> show "1st"
+            String shortKey = k.substring("matchbook:".length());
+            if (shortKey.endsWith("_place")) shortKey = shortKey.substring(0, shortKey.length() - "_place".length());
+            return shortKey;
+        }
+        return null;
+    }
+
+    private static String friendlyName(String key) {
+        if (key == null) return "";
+        return switch (key.toLowerCase(Locale.ROOT)) {
+            case "bedwars:kills" -> "Kills";
+            case "bedwars:deaths" -> "Deaths";
+            case "bedwars:final_kills" -> "Final Kills";
+            case "bedwars:final_deaths" -> "Final Deaths";
+            case "bedwars:beds_destroyed" -> "Beds Destroyed";
+            case "bedwars:wins" -> "Wins";
+            case "bedwars:loses" -> "Losses";
+            default -> {
+                // Remove namespace when present
+                int idx = key.indexOf(':');
+                String s = idx >= 0 && idx + 1 < key.length() ? key.substring(idx + 1) : key;
+                // Make it look nicer: underscores -> spaces
+                yield titleCase(s.replace('_', ' '));
+            }
+        };
+    }
+
+    private static String titleCase(String s) {
+        if (s == null || s.isBlank()) return "";
+        String[] parts = s.trim().split("\\s+");
+        StringBuilder out = new StringBuilder();
+        for (String p : parts) {
+            if (p.isEmpty()) continue;
+            if (out.length() > 0) out.append(' ');
+            out.append(Character.toUpperCase(p.charAt(0)));
+            if (p.length() > 1) out.append(p.substring(1));
+        }
+        return out.toString();
     }
 
     private static String statLine(String name, long value) {

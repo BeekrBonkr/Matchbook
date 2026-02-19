@@ -36,7 +36,7 @@ public final class MatchExporter {
 
         File outFile = new File(exportsDir, matchCode + ".csv");
 
-        List<String> columns = resolveColumns();
+        List<String> columns = resolveColumnsWithPlacements(List.of(yml));
 
         try (Writer writer = new OutputStreamWriter(new FileOutputStream(outFile), StandardCharsets.UTF_8);
              PrintWriter out = new PrintWriter(writer)) {
@@ -97,7 +97,7 @@ public final class MatchExporter {
 
         File outFile = new File(exportsDir, safeName + ".csv");
 
-        List<String> columns = resolveColumns();
+        List<String> columns = resolveColumnsWithPlacements(matchYmls);
         List<String> statColumns = columns.stream().filter(MatchExporter::isStatKey).toList();
 
         // Aggregate by UUID
@@ -162,6 +162,68 @@ public final class MatchExporter {
         List<String> tracked = settings != null ? settings.trackedKeys() : plugin.getMatchbookConfig().trackedKeys();
         if (tracked != null) out.addAll(tracked);
         return out;
+    }
+
+    /**
+     * Adds any detected placement columns (matchbook:*_place) from the selected matches.
+     * This ensures multi-match export sums placement counts correctly without requiring
+     * admins to keep export column configs in sync.
+     */
+    private List<String> resolveColumnsWithPlacements(List<YamlConfiguration> matchYmls) {
+        List<String> base = new ArrayList<>(resolveColumns());
+
+        // Discover placement keys across all matches being exported.
+        Set<String> placementKeys = new HashSet<>();
+        if (matchYmls != null) {
+            for (YamlConfiguration yml : matchYmls) {
+                if (yml == null) continue;
+                for (String uuidStr : yml.getStringList("match.participants")) {
+                    var sec = yml.getConfigurationSection("players." + uuidStr + ".diff");
+                    if (sec == null) continue;
+                    for (String k : sec.getKeys(false)) {
+                        if (k == null) continue;
+                        if (k.startsWith("matchbook:") && k.endsWith("_place")) placementKeys.add(k);
+                    }
+                }
+            }
+        }
+
+        if (placementKeys.isEmpty()) return base;
+
+        // Sort placement keys by numeric rank (1st,2nd,3rd,4th...)
+        List<String> sorted = new ArrayList<>(placementKeys);
+        sorted.sort(Comparator.comparingInt(MatchExporter::placementKeyRank));
+
+        // Insert placement columns after username if possible, otherwise append.
+        int insertAt = -1;
+        for (int i = 0; i < base.size(); i++) {
+            if ("username".equalsIgnoreCase(base.get(i))) {
+                insertAt = i + 1;
+                break;
+            }
+        }
+        if (insertAt < 0) insertAt = base.size();
+
+        for (String k : sorted) {
+            if (!base.contains(k)) base.add(insertAt++, k);
+        }
+        return base;
+    }
+
+    private static int placementKeyRank(String key) {
+        if (key == null) return Integer.MAX_VALUE;
+        String s = key;
+        int idx = s.indexOf(':');
+        if (idx >= 0) s = s.substring(idx + 1);
+        if (s.endsWith("_place")) s = s.substring(0, s.length() - "_place".length());
+        // s is like "1st" or "12th"
+        String digits = s.replaceAll("\\D+", "");
+        if (digits.isEmpty()) return Integer.MAX_VALUE;
+        try {
+            return Integer.parseInt(digits);
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
+        }
     }
 
     private static boolean isMeta(String col) {

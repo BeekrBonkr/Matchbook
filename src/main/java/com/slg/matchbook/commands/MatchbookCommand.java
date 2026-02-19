@@ -4,11 +4,14 @@ import com.slg.matchbook.MatchbookPlugin;
 import com.slg.matchbook.gui.MatchesDetailsGui;
 import com.slg.matchbook.gui.MatchesGui;
 import com.slg.matchbook.io.MatchExporter;
+import com.slg.matchbook.io.PastebinUploader;
 import org.bukkit.ChatColor;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.*;
 
 /**
@@ -179,6 +182,9 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                                 sender.sendMessage(ChatColor.GREEN + "Exported match " + ChatColor.WHITE + matchCodes.get(0));
                                 sender.sendMessage(ChatColor.GRAY + "Saved to: " + finalOutFile.getAbsolutePath());
                             });
+
+                            // Optional upload to Pastebin (non-fatal if it fails)
+                            maybeUploadToPastebin(sender, matchCodes.get(0), finalOutFile);
                         } else {
                             outFile = exporter.exportMatchesCombinedToCsv(matchCodes);
                             File finalOutFile1 = outFile;
@@ -188,6 +194,9 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                                         + ChatColor.GREEN + " matches.");
                                 sender.sendMessage(ChatColor.GRAY + "Saved to: " + finalOutFile1.getAbsolutePath());
                             });
+
+                            // Optional upload to Pastebin (non-fatal if it fails)
+                            maybeUploadToPastebin(sender, "combined-" + matchCodes.size(), finalOutFile1);
                         }
                     } catch (Exception e) {
                         org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
@@ -426,6 +435,36 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
             if (o.toLowerCase(Locale.ROOT).startsWith(p)) out.add(o);
         }
         return out;
+    }
+
+    private void maybeUploadToPastebin(CommandSender sender, String labelForTitle, File csvFile) {
+        try {
+            var cfg = plugin.getMatchbookConfig().raw();
+            if (!cfg.getBoolean("export_upload.enabled", false)) return;
+
+            String devKey = cfg.getString("export_upload.pastebin.api_dev_key", "");
+            if (devKey == null || devKey.isBlank()) return;
+
+            String userKey = cfg.getString("export_upload.pastebin.api_user_key", "");
+            boolean unlisted = cfg.getBoolean("export_upload.unlisted", true);
+            String expire = cfg.getString("export_upload.expire", "1W");
+            String prefix = cfg.getString("export_upload.paste_name_prefix", "Matchbook Export");
+
+            String title = (prefix == null ? "Matchbook Export" : prefix) + " - " + labelForTitle;
+            String csv = Files.readString(csvFile.toPath(), StandardCharsets.UTF_8);
+
+            PastebinUploader uploader = new PastebinUploader(devKey, userKey);
+            String url = uploader.upload(csv, title, unlisted, expire);
+
+            org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                sender.sendMessage(ChatColor.GREEN + "Pastebin: " + ChatColor.WHITE + url);
+            });
+        } catch (Exception e) {
+            // Don't fail export if upload fails; just log in debug.
+            if (plugin.getMatchbookConfig().debugLogging()) {
+                plugin.getLogger().warning("Export upload failed: " + e.getMessage());
+            }
+        }
     }
 
     private static List<String> parseMatchCodes(String input) {

@@ -73,23 +73,30 @@ public final class MatchLifecycleService {
     public void onRoundStart(Arena arena) {
         if (arena == null) return;
 
-        // Avoid duplicate sessions
-        if (sessionsByArena.containsKey(arena.getName())) return;
+        // If a session already exists (created early on first join), reuse its matchId.
+        MatchSession session = sessionsByArena.get(arena.getName());
+        if (session == null) {
+            // Short human-friendly code for esports submissions
+            String matchId = MatchIdUtil.newMatchId();
+            long startUnix = System.currentTimeMillis() / 1000L;
+            session = new MatchSession(matchId, arena.getName(), startUnix);
+            sessionsByArena.put(arena.getName(), session);
+        }
 
-        // Short human-friendly code for esports submissions
-        String matchId = MatchIdUtil.newMatchId();
-        long startUnix = System.currentTimeMillis() / 1000L;
-
-        MatchSession session = new MatchSession(matchId, arena.getName(), startUnix);
+        // Overwrite start time at the true round start.
+        session.startUnix = System.currentTimeMillis() / 1000L;
 
         // Participants at start
         for (Player p : arena.getPlayers()) {
             session.addParticipant(p.getUniqueId());
             session.setUsername(p.getUniqueId(), p.getName());
-            session.setTeam(p.getUniqueId(), resolveTeamFromArena(arena, p.getUniqueId()));
+            Team team = resolveTeamFromArena(arena, p.getUniqueId());
+            session.setTeam(p.getUniqueId(), team);
+            if (team != null) {
+                session.markTeamParticipating(team);
+                session.markPlayerAlive(team, p.getUniqueId());
+            }
         }
-
-        sessionsByArena.put(arena.getName(), session);
 
         // Take totals snapshot near start for auditing/debugging.
         takeStartSnapshots(arena, session);
@@ -101,13 +108,22 @@ public final class MatchLifecycleService {
     public void onPlayerJoinArena(Arena arena, Player player) {
         if (arena == null || player == null) return;
 
-        MatchSession session = sessionsByArena.get(arena.getName());
-        if (session == null) return;
+        // Create a session early so placeholders can resolve during pre-round phases.
+        MatchSession session = sessionsByArena.computeIfAbsent(arena.getName(), __ ->
+                new MatchSession(MatchIdUtil.newMatchId(), arena.getName(), System.currentTimeMillis() / 1000L));
 
         UUID uuid = player.getUniqueId();
         session.addParticipant(uuid);
         session.setUsername(uuid, player.getName());
-        session.setTeam(uuid, resolveTeamFromArena(arena, uuid));
+
+        Team team = resolveTeamFromArena(arena, uuid);
+        session.setTeam(uuid, team);
+
+        // Placement tracking: mark participation + alive status for this player.
+        if (team != null) {
+            session.markTeamParticipating(team);
+            session.markPlayerAlive(team, uuid);
+        }
 
         // If the player previously quit this same arena (and we captured quit stats),
         // but they rejoined, drop that captured snapshot so we store the final result.
@@ -141,7 +157,12 @@ public final class MatchLifecycleService {
         UUID uuid = player.getUniqueId();
         session.addParticipant(uuid);
         session.setUsername(uuid, player.getName());
-        session.setTeam(uuid, resolveTeamFromArena(arena, uuid));
+        Team team = resolveTeamFromArena(arena, uuid);
+        session.setTeam(uuid, team);
+
+        // If they quit mid-match, treat as no longer alive for placement purposes.
+        // (This matches esports expectations: leaving = eliminated / not alive.)
+        if (team != null) session.markPlayerFinalDead(team, uuid);
 
         // Capture game stats snapshot from QuitPlayerMemory (best), fallback to live game stats.
         QuitPlayerMemory mem = null;
@@ -193,10 +214,74 @@ public final class MatchLifecycleService {
                 captureMatchStatsFromArena(arena, session, () -> {
                     // Ensure critical counters are present even if snapshot sources missed them.
                     session.applyTriggerIncrementsToMatchStats(PERSIST_TRIGGER_KEYS);
+
+                    // Finalize placement keys into the per-player matchStats map.
+                    finalizePlacements(arena, session);
+                    session.applyPlacementsToMatchStats();
+
                     finishMatch(arena, session, result);
                 });
             });
         }, Math.max(1L, delay));
+    }
+
+    // ----------------------------------------------------------------------
+    // Placement tracking
+    // ----------------------------------------------------------------------
+
+    private void maybeMarkTeamEliminated(Arena arena, MatchSession session, Team team) {
+        if (arena == null || session == null || team == null) return;
+        if (!session.bedLostTeams.contains(team)) return; // bed must be gone
+        if (!session.isTeamFullyDead(team)) return;        // all players must be dead
+
+        // Already placed?
+        if (session.placementByTeam.containsKey(team)) return;
+
+        // Record elimination order
+        session.eliminationOrder.add(team);
+
+        int totalTeams = session.totalTeams();
+        // If we don't know total teams yet, approximate from currently tracked teams.
+        if (totalTeams <= 0) totalTeams = Math.max(1, session.participatingTeams.size());
+
+        int eliminatedIndex = session.eliminationOrder.size(); // 1-based
+        int place = Math.max(1, totalTeams - eliminatedIndex + 1);
+        session.setPlacementIfAbsent(team, place);
+    }
+
+    private void finalizePlacements(Arena arena, MatchSession session) {
+        if (arena == null || session == null) return;
+
+        // Make sure we have a team roster based on participants we've seen.
+        for (UUID u : session.getParticipants()) {
+            Team t = session.getTeam(u);
+            if (t != null) session.markTeamParticipating(t);
+        }
+
+        // Winner => 1st place.
+        if (session.winningTeam != null) {
+            session.setPlacementIfAbsent(session.winningTeam, 1);
+        }
+
+        // Any team without placement (e.g., ties/aborts) gets 1st if still "alive", otherwise best-effort.
+        for (Team t : session.participatingTeams) {
+            if (session.placementByTeam.containsKey(t)) continue;
+
+            boolean bedLost = session.bedLostTeams.contains(t);
+            boolean fullyDead = session.isTeamFullyDead(t);
+
+            if (!bedLost && !fullyDead) {
+                // Still alive at end -> treat as 1st (tie) unless a winner already assigned.
+                session.setPlacementIfAbsent(t, session.winningTeam != null ? 2 : 1);
+            } else if (bedLost && fullyDead) {
+                // Should have been caught, but just in case.
+                maybeMarkTeamEliminated(arena, session, t);
+            } else {
+                // Partial info; default to last known place bucket.
+                int fallback = Math.max(1, session.totalTeams());
+                session.setPlacementIfAbsent(t, fallback);
+            }
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -211,11 +296,18 @@ public final class MatchLifecycleService {
         UUID uuid = victim.getUniqueId();
         session.addParticipant(uuid);
         session.setUsername(uuid, victim.getName());
-        session.setTeam(uuid, resolveTeamFromArena(arena, uuid));
+        Team team = resolveTeamFromArena(arena, uuid);
+        session.setTeam(uuid, team);
 
         session.addTriggerIncrement(uuid, "bedwars:deaths", 1L);
         if (fatalDeath) {
             session.addTriggerIncrement(uuid, "bedwars:final_deaths", 1L);
+
+            // Placement tracking: fatal deaths remove the player from alive list.
+            if (team != null) {
+                session.markPlayerFinalDead(team, uuid);
+                maybeMarkTeamEliminated(arena, session, team);
+            }
         }
     }
 
@@ -235,7 +327,7 @@ public final class MatchLifecycleService {
         }
     }
 
-    public void onBedBreak(Arena arena, Player breaker) {
+    public void onBedBreak(Arena arena, Player breaker, Team bedTeam) {
         if (arena == null || breaker == null) return;
         MatchSession session = sessionsByArena.get(arena.getName());
         if (session == null) return;
@@ -243,9 +335,16 @@ public final class MatchLifecycleService {
         UUID uuid = breaker.getUniqueId();
         session.addParticipant(uuid);
         session.setUsername(uuid, breaker.getName());
-        session.setTeam(uuid, resolveTeamFromArena(arena, uuid));
+        Team breakerTeam = resolveTeamFromArena(arena, uuid);
+        session.setTeam(uuid, breakerTeam);
 
         session.addTriggerIncrement(uuid, "bedwars:beds_destroyed", 1L);
+
+        // Placement tracking: record which team lost their bed (NOT the breaking player's team).
+        if (bedTeam != null) {
+            session.bedLostTeams.add(bedTeam);
+            maybeMarkTeamEliminated(arena, session, bedTeam);
+        }
     }
 
     /**

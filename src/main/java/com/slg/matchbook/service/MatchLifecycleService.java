@@ -60,6 +60,14 @@ public final class MatchLifecycleService {
 
     private final ConcurrentMap<String, MatchSession> sessionsByArena = new ConcurrentHashMap<>();
 
+    /**
+     * Scoreboards often continue to request placeholders briefly after RoundEnd or while players are
+     * transitioning out of an arena. Keep a short "last known" cache so %matchbook_matchcode% stays reliable.
+     */
+    private final ConcurrentMap<UUID, CachedMatchId> lastMatchIdByPlayer = new ConcurrentHashMap<>();
+
+    private record CachedMatchId(String matchId, String arenaName, long expiresAtMillis) {}
+
     public MatchLifecycleService(MatchbookPlugin plugin) {
         this.plugin = plugin;
         // MBedwars API is accessed via static entrypoints (no singleton instance).
@@ -68,6 +76,45 @@ public final class MatchLifecycleService {
 
     public MatchSession getSession(String arenaName) {
         return sessionsByArena.get(arenaName);
+    }
+
+    /**
+     * Ensure a session exists for an arena.
+     *
+     * This is intentionally safe to call from PlaceholderAPI resolution: it does not start snapshots,
+     * it simply guarantees a stable matchId for the arena instance.
+     */
+    public MatchSession getOrCreateSession(Arena arena, String reason) {
+        if (arena == null) return null;
+
+        MatchSession session = sessionsByArena.computeIfAbsent(arena.getName(), __ ->
+                new MatchSession(MatchIdUtil.newMatchId(), arena.getName(), System.currentTimeMillis() / 1000L));
+
+        // If this call originated from a player context, we still want placeholders to be stable
+        // while the player is transitioning.
+        if (reason != null && !reason.isBlank()) {
+            // no-op: reason is for future debugging hooks
+        }
+
+        return session;
+    }
+
+    public String getCachedMatchId(UUID playerUuid) {
+        if (playerUuid == null) return "";
+        CachedMatchId c = lastMatchIdByPlayer.get(playerUuid);
+        if (c == null) return "";
+        if (System.currentTimeMillis() > c.expiresAtMillis) {
+            lastMatchIdByPlayer.remove(playerUuid);
+            return "";
+        }
+        return c.matchId;
+    }
+
+    public void cacheMatchId(UUID playerUuid, String arenaName, String matchId) {
+        if (playerUuid == null || matchId == null || matchId.isBlank()) return;
+        long graceSeconds = plugin.getMatchbookConfig().raw().getLong("placeholder.grace_seconds", 60L);
+        long expires = System.currentTimeMillis() + Math.max(5L, graceSeconds) * 1000L;
+        lastMatchIdByPlayer.put(playerUuid, new CachedMatchId(matchId, arenaName, expires));
     }
 
     public void onRoundStart(Arena arena) {
@@ -88,6 +135,7 @@ public final class MatchLifecycleService {
 
         // Participants at start
         for (Player p : arena.getPlayers()) {
+            session.unmarkSpectatorOnly(p.getUniqueId());
             session.addParticipant(p.getUniqueId());
             session.setUsername(p.getUniqueId(), p.getName());
             Team team = resolveTeamFromArena(arena, p.getUniqueId());
@@ -96,6 +144,8 @@ public final class MatchLifecycleService {
                 session.markTeamParticipating(team);
                 session.markPlayerAlive(team, p.getUniqueId());
             }
+
+            cacheMatchId(p.getUniqueId(), arena.getName(), session.matchId);
         }
 
         // Take totals snapshot near start for auditing/debugging.
@@ -113,11 +163,35 @@ public final class MatchLifecycleService {
                 new MatchSession(MatchIdUtil.newMatchId(), arena.getName(), System.currentTimeMillis() / 1000L));
 
         UUID uuid = player.getUniqueId();
-        session.addParticipant(uuid);
-        session.setUsername(uuid, player.getName());
 
+        // Determine current role
         Team team = resolveTeamFromArena(arena, uuid);
-        session.setTeam(uuid, team);
+        boolean spectator = isSpectator(arena, player);
+
+        // Spectator-only viewers can join an arena mid-match to watch.
+        // They must NOT be counted as participants/stat owners.
+        if (spectator && team == null && session.getTeam(uuid) == null) {
+            session.unmarkPending(uuid);
+            session.markSpectatorOnly(uuid);
+            session.setUsername(uuid, player.getName());
+            // Still cache match id so scoreboards/overlays can show it while spectating.
+            cacheMatchId(uuid, arena.getName(), session.matchId);
+            return;
+        }
+
+        // If MBedwars hasn't assigned a team yet (common in lobby), keep them pending.
+        // They will be promoted to a real participant the moment they get a team.
+        if (team == null && !spectator && session.getTeam(uuid) == null) {
+            session.unmarkSpectatorOnly(uuid);
+            session.markPending(uuid);
+            session.setUsername(uuid, player.getName());
+            cacheMatchId(uuid, arena.getName(), session.matchId);
+            return;
+        }
+
+        // Real participant (team assigned, or already known participant)
+        session.promoteToParticipant(uuid, team);
+        session.setUsername(uuid, player.getName());
 
         // Placement tracking: mark participation + alive status for this player.
         if (team != null) {
@@ -128,7 +202,9 @@ public final class MatchLifecycleService {
         // If the player previously quit this same arena (and we captured quit stats),
         // but they rejoined, drop that captured snapshot so we store the final result.
         session.removeMatchStats(uuid);
-    }
+
+        cacheMatchId(uuid, arena.getName(), session.matchId);
+}
 
     public void onArenaWinningTeam(Arena arena, Team winningTeam) {
         if (arena == null) return;
@@ -155,10 +231,22 @@ public final class MatchLifecycleService {
         if (session == null) return;
 
         UUID uuid = player.getUniqueId();
-        session.addParticipant(uuid);
-        session.setUsername(uuid, player.getName());
         Team team = resolveTeamFromArena(arena, uuid);
-        session.setTeam(uuid, team);
+
+        boolean spectator = isSpectator(arena, player);
+
+        // Spectator-only viewers (including lobby->leave->spectate later) should not be captured.
+        // If they never had a team in this match, treat them as spectator-only and skip stat capture.
+        if (team == null && session.getTeam(uuid) == null && (session.isSpectatorOnly(uuid) || session.isPending(uuid) || spectator)) {
+            session.markSpectatorOnly(uuid);
+            session.unmarkPending(uuid);
+            session.setUsername(uuid, player.getName());
+            return;
+        }
+
+        // Otherwise, ensure they are treated as a real participant.
+        session.promoteToParticipant(uuid, team);
+        session.setUsername(uuid, player.getName());
 
         // If they quit mid-match, treat as no longer alive for placement purposes.
         // (This matches esports expectations: leaving = eliminated / not alive.)
@@ -202,10 +290,6 @@ public final class MatchLifecycleService {
             session.setTeam(p.getUniqueId(), resolveTeamFromArena(arena, p.getUniqueId()));
         }
 
-        final String result = session.result != null
-                ? session.result
-                : (session.winningTeam != null ? ("WIN:" + session.winningTeam.name()) : "UNKNOWN");
-
         long delay = plugin.getMatchbookConfig().runtimeSettings().endSnapshotDelayTicks();
 
         // Capture totals end snapshot (debug/audit), then capture per-match stats and save.
@@ -219,6 +303,12 @@ public final class MatchLifecycleService {
                     finalizePlacements(arena, session);
                     session.applyPlacementsToMatchStats();
 
+                    // If MBedwars didn't provide a winner (or we accidentally marked a tie),
+                    // infer from recorded per-match stats (bedwars:wins).
+                    inferResultFromRecordedWinStats(session);
+
+                    // Compute the final match result AFTER tie detection/placement finalization.
+                    String result = computeResult(session);
                     finishMatch(arena, session, result);
                 });
             });
@@ -252,18 +342,57 @@ public final class MatchLifecycleService {
     private void finalizePlacements(Arena arena, MatchSession session) {
         if (arena == null || session == null) return;
 
+        boolean tieByAliveTeams = false;
+
+        // If bed break events couldn't identify the bed team (API differences), try to infer
+        // bed state directly from Team methods at the end.
+        for (Team t : getArenaTeamsSafe(arena, session)) {
+            if (t == null) continue;
+            if (!session.bedLostTeams.contains(t) && isTeamBedGone(t)) {
+                session.bedLostTeams.add(t);
+            }
+        }
+
         // Make sure we have a team roster based on participants we've seen.
         for (UUID u : session.getParticipants()) {
             Team t = session.getTeam(u);
             if (t != null) session.markTeamParticipating(t);
         }
 
-        // Winner => 1st place.
-        if (session.winningTeam != null) {
-            session.setPlacementIfAbsent(session.winningTeam, 1);
+        // Detect tie by observing >1 teams still alive at game-over.
+        // This can happen when the match ends via time limit / forced end.
+        // In that case, ALL alive teams should be considered "1st place".
+        List<Team> aliveAtEnd = new ArrayList<>();
+        for (Team t : session.participatingTeams) {
+            if (t == null) continue;
+            if (isTeamAliveAtEnd(t, session)) aliveAtEnd.add(t);
         }
 
-        // Any team without placement (e.g., ties/aborts) gets 1st if still "alive", otherwise best-effort.
+        // Only treat "multiple teams alive" as a tie when we do NOT have a definite winning team.
+        // MBedwars versions / event ordering can briefly leave players marked as alive on multiple teams.
+        // If the arena reports a winner, trust it and avoid falsely marking ties.
+        tieByAliveTeams = session.winningTeam == null && aliveAtEnd.size() > 1;
+        if (tieByAliveTeams) {
+            session.result = "TIE";
+            session.winningTeam = null;
+            for (Team t : aliveAtEnd) {
+                session.setPlacement(t, 1);
+            }
+        }
+
+        // Winner => 1st place (unless tie was detected above).
+        if (session.winningTeam != null) session.setPlacementIfAbsent(session.winningTeam, 1);
+
+        // Fill elimination placements (bed gone + fully dead) for any teams we didn't catch live.
+        for (Team t : session.participatingTeams) {
+            if (t == null) continue;
+            if (session.placementByTeam.containsKey(t)) continue;
+            if (session.bedLostTeams.contains(t) && session.isTeamFullyDead(t)) {
+                maybeMarkTeamEliminated(arena, session, t);
+            }
+        }
+
+        // Any team without placement (ties/aborts/API edge cases) gets a best-effort assignment.
         for (Team t : session.participatingTeams) {
             if (session.placementByTeam.containsKey(t)) continue;
 
@@ -271,17 +400,156 @@ public final class MatchLifecycleService {
             boolean fullyDead = session.isTeamFullyDead(t);
 
             if (!bedLost && !fullyDead) {
-                // Still alive at end -> treat as 1st (tie) unless a winner already assigned.
-                session.setPlacementIfAbsent(t, session.winningTeam != null ? 2 : 1);
-            } else if (bedLost && fullyDead) {
+                // Still alive at end.
+                // If we have a winner, treat remaining alive teams as runner-up (2nd).
+                // If no winner OR tie-by-alive-teams, treat as tied 1st.
+                int place = (tieByAliveTeams || session.winningTeam == null) ? 1 : 2;
+                session.setPlacementIfAbsent(t, place);
+                continue;
+            }
+
+            if (bedLost && fullyDead) {
                 // Should have been caught, but just in case.
                 maybeMarkTeamEliminated(arena, session, t);
-            } else {
-                // Partial info; default to last known place bucket.
-                int fallback = Math.max(1, session.totalTeams());
-                session.setPlacementIfAbsent(t, fallback);
+                continue;
             }
+
+            // Partial info:
+            // - fullyDead but bedLost unknown
+            // - bedLost but not fullyDead (shouldn't happen, but API glitches can)
+            // Put them in the "last" bucket so we never falsely reward them.
+            int fallback = Math.max(1, session.totalTeams());
+            if (session.winningTeam != null && fallback == 1) fallback = 2;
+            session.setPlacementIfAbsent(t, fallback);
         }
+    }
+
+    /**
+     * Best-effort result inference.
+     *
+     * Why this exists:
+     *  - Some MBedwars builds fire ArenaWinningTeamDetermineEvent with winningTeam == null
+     *    even when the match had a clear winner.
+     *  - As a fallback, we infer the winning team by looking at the per-match stats and finding
+     *    which team has players with bedwars:wins == 1.
+     *
+     * Behavior:
+     *  - If exactly one team has the highest (and >0) wins total => WIN:<TEAM>
+     *  - If multiple teams share the highest wins total (>0) => TIE
+     *  - If no wins are present => leave result as-is (UNKNOWN/TIE)
+     */
+    private void inferResultFromRecordedWinStats(MatchSession session) {
+        if (session == null) return;
+
+        // Only infer when MB didn't provide a clear winner OR we currently think it's a tie.
+        // (We still allow overriding a false tie.)
+        boolean needsInference = session.winningTeam == null || (session.result != null && session.result.equalsIgnoreCase("TIE"));
+        if (!needsInference) return;
+
+        // Team -> sum of "wins" across players (for this match)
+        Map<Team, Long> winsByTeam = new LinkedHashMap<>();
+
+        for (UUID uuid : session.getParticipants()) {
+            if (uuid == null) continue;
+            if (session.isSpectatorOnly(uuid) || session.isPending(uuid)) continue;
+
+            Team team = session.getTeam(uuid);
+            if (team == null) continue;
+
+            long wins = 0L;
+
+            // Prefer per-match stats (QuitPlayerMemory / game stats)
+            StatSnapshot matchSnap = session.getMatchStats(uuid);
+            if (matchSnap != null) {
+                wins = matchSnap.values().getOrDefault("bedwars:wins", 0L);
+            } else {
+                // Fallback to start/end diff when matchStats is missing.
+                StatSnapshot start = session.getStart(uuid);
+                StatSnapshot end = session.getEnd(uuid);
+                if (start != null && end != null) {
+                    wins = StatSnapshot.diff(start, end).getOrDefault("bedwars:wins", 0L);
+                }
+            }
+
+            if (wins <= 0L) continue;
+            winsByTeam.put(team, winsByTeam.getOrDefault(team, 0L) + wins);
+        }
+
+        if (winsByTeam.isEmpty()) return;
+
+        long max = 0L;
+        for (long v : winsByTeam.values()) max = Math.max(max, v);
+        if (max <= 0L) return;
+
+        List<Team> top = new ArrayList<>();
+        for (var e : winsByTeam.entrySet()) {
+            if (e.getValue() != null && e.getValue() == max) top.add(e.getKey());
+        }
+
+        if (top.isEmpty()) return;
+
+        if (top.size() == 1) {
+            Team inferred = top.get(0);
+            session.winningTeam = inferred;
+            session.result = "WIN:" + inferred.name();
+
+            // Ensure placements are definitive. If we previously marked a tie (multiple teams at 1st),
+            // demote non-winner 1st-place teams to 2nd.
+            session.setPlacementIfAbsent(inferred, 1);
+            for (Team t : new ArrayList<>(session.placementByTeam.keySet())) {
+                if (t == null || t.equals(inferred)) continue;
+                Integer place = session.placementByTeam.get(t);
+                if (place != null && place == 1) {
+                    session.setPlacement(t, 2);
+                }
+            }
+        } else {
+            session.winningTeam = null;
+            session.result = "TIE";
+            for (Team t : top) session.setPlacementIfAbsent(t, 1);
+        }
+    }
+
+    private Collection<Team> getArenaTeamsSafe(Arena arena, MatchSession session) {
+        try {
+            Method m = arena.getClass().getMethod("getTeams");
+            Object o = m.invoke(arena);
+            if (o instanceof Collection<?> c) {
+                List<Team> out = new ArrayList<>();
+                for (Object obj : c) if (obj instanceof Team t) out.add(t);
+                return out;
+            }
+        } catch (Throwable ignored) {}
+
+        // Fallback: whatever we observed during the match.
+        return session != null ? session.participatingTeams : List.of();
+    }
+
+    private boolean isTeamBedGone(Team team) {
+        if (team == null) return false;
+
+        // Try a variety of common method names across MBedwars versions.
+        String[] candidates = {
+                "isBedDestroyed",
+                "isBedBroken",
+                "isBedGone",
+                "hasBed",
+                "isBedAlive"
+        };
+
+        for (String name : candidates) {
+            try {
+                Method m = team.getClass().getMethod(name);
+                Object o = m.invoke(team);
+                if (o instanceof Boolean b) {
+                    // hasBed / isBedAlive are inverted semantics
+                    if (name.equals("hasBed") || name.equals("isBedAlive")) return !b;
+                    return b;
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        return false;
     }
 
     // ----------------------------------------------------------------------
@@ -294,6 +562,7 @@ public final class MatchLifecycleService {
         if (session == null) return;
 
         UUID uuid = victim.getUniqueId();
+        session.unmarkSpectatorOnly(uuid);
         session.addParticipant(uuid);
         session.setUsername(uuid, victim.getName());
         Team team = resolveTeamFromArena(arena, uuid);
@@ -317,6 +586,7 @@ public final class MatchLifecycleService {
         if (session == null) return;
 
         UUID uuid = killer.getUniqueId();
+        session.unmarkSpectatorOnly(uuid);
         session.addParticipant(uuid);
         session.setUsername(uuid, killer.getName());
         session.setTeam(uuid, resolveTeamFromArena(arena, uuid));
@@ -333,6 +603,7 @@ public final class MatchLifecycleService {
         if (session == null) return;
 
         UUID uuid = breaker.getUniqueId();
+        session.unmarkSpectatorOnly(uuid);
         session.addParticipant(uuid);
         session.setUsername(uuid, breaker.getName());
         Team breakerTeam = resolveTeamFromArena(arena, uuid);
@@ -378,6 +649,11 @@ public final class MatchLifecycleService {
     // -----------------
 
     private void finishMatch(Arena arena, MatchSession session, String result) {
+        // Cache matchId for participants so placeholders remain stable during post-game transitions.
+        for (UUID u : session.getParticipants()) {
+            cacheMatchId(u, arena != null ? arena.getName() : session.arenaName, session.matchId);
+        }
+
         // Remove the session now (we have what we need). This prevents late events from touching it.
         sessionsByArena.remove(arena.getName());
 
@@ -708,6 +984,82 @@ public final class MatchLifecycleService {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    /**
+     * Best-effort spectator detection across MBedwars versions.
+     *
+     * NOTE: Eliminated participants often become spectators; we only use this at JOIN time
+     * to mark "spectator-only" viewers who were never on a team.
+     */
+    private boolean isSpectator(Arena arena, Player player) {
+        if (arena == null || player == null) return false;
+
+        try {
+            var m = arena.getClass().getMethod("isSpectator", Player.class);
+            Object o = m.invoke(arena, player);
+            if (o instanceof Boolean b) return b;
+        } catch (Throwable ignored) {}
+
+        try {
+            var m = arena.getClass().getMethod("getSpectators");
+            Object o = m.invoke(arena);
+            if (o instanceof Collection<?> c) return c.contains(player) || c.contains(player.getUniqueId());
+        } catch (Throwable ignored) {}
+
+        return false;
+    }
+
+    /**
+     * Returns true if the team is considered alive at end-of-match.
+     * Prefer our tracked alivePlayersByTeam, but fall back to reflective team APIs if needed.
+     */
+    private boolean isTeamAliveAtEnd(Team team, MatchSession session) {
+        if (team == null || session == null) return false;
+
+        Set<UUID> alive = session.alivePlayersByTeam.get(team);
+        if (alive != null) return !alive.isEmpty();
+
+        // Reflection fallbacks across MBedwars versions
+        String[] boolMethods = {"isAlive", "isLiving", "isEliminated", "isDead"};
+        for (String name : boolMethods) {
+            try {
+                Method m = team.getClass().getMethod(name);
+                Object o = m.invoke(team);
+                if (o instanceof Boolean b) {
+                    if (name.equals("isEliminated") || name.equals("isDead")) return !b;
+                    return b;
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        String[] countMethods = {"getAlivePlayerCount", "getAlivePlayersCount"};
+        for (String name : countMethods) {
+            try {
+                Method m = team.getClass().getMethod(name);
+                Object o = m.invoke(team);
+                if (o instanceof Number n) return n.intValue() > 0;
+            } catch (Throwable ignored) {}
+        }
+
+        String[] collMethods = {"getAlivePlayers", "getPlayersAlive"};
+        for (String name : collMethods) {
+            try {
+                Method m = team.getClass().getMethod(name);
+                Object o = m.invoke(team);
+                if (o instanceof Collection<?> c) return !c.isEmpty();
+            } catch (Throwable ignored) {}
+        }
+
+        // Unknown -> assume not alive (conservative). Our normal tracking should cover real matches.
+        return false;
+    }
+
+    private static String computeResult(MatchSession session) {
+        if (session == null) return "UNKNOWN";
+        if (session.result != null && !session.result.isBlank()) return session.result;
+        if (session.winningTeam != null) return "WIN:" + session.winningTeam.name();
+        return "UNKNOWN";
     }
 
     private static final class UuidSnapshot {

@@ -1,6 +1,6 @@
 name: Matchbook
 main: com.slg.matchbook.MatchbookPlugin
-version: 0.4.1
+version: 0.4.5
 api-version: "1.21"
 depend: [MBedwars]
 softdepend: [PlaceholderAPI]
@@ -33,6 +33,9 @@ permissions:
     default: op
     children:
       mb.command.migrate: true
+      mb.command.reload: true
+      mb.command.statskeys: true
+      mb.command.test: true
 
   mb.command.matches:
     description: "/mb matches"
@@ -56,6 +59,18 @@ permissions:
 
   mb.command.migrate:
     description: "/mb migrate yaml2mysql|mysql2yaml [--dry-run]"
+    default: false
+
+  mb.command.reload:
+    description: "/mb reload"
+    default: false
+
+  mb.command.statskeys:
+    description: "/mb statskeys [player]"
+    default: false
+
+  mb.command.test:
+    description: "/mb test [--pastebin]"
     default: false
 
   # Legacy nodes (kept for backwards compatibility)

@@ -42,6 +42,21 @@ public final class MatchYamlCodec {
         for (UUID u : doc.participants()) participants.add(u.toString());
         yml.set("match.participants", participants);
 
+        List<String> spectators = new ArrayList<>();
+        if (doc.spectators() != null) {
+            for (UUID u : doc.spectators()) spectators.add(u.toString());
+        }
+        yml.set("match.spectators", spectators);
+
+        // Store spectator usernames for GUI display.
+        if (doc.spectatorUsernames() != null) {
+            for (var e : doc.spectatorUsernames().entrySet()) {
+                if (e.getKey() == null) continue;
+                String base = "spectators." + e.getKey();
+                yml.set(base + ".username", e.getValue());
+            }
+        }
+
         for (MatchDocument.PlayerEntry e : doc.players().values()) {
             String base = "players." + e.uuid();
             yml.set(base + ".username", e.username());

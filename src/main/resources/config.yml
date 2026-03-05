@@ -1,5 +1,5 @@
 # Do not change this!!!
-config-version: "0.0.5"
+config-version: "0.0.6"
 
 # Matchbook configuration
 
@@ -66,6 +66,9 @@ export:
 # Upload CSV exports to Pastebin so players don't have to find files on disk
 export_upload:
   enabled: false
+  # Safety: /matchbook test --pastebin will only create a real paste if this is true.
+  # This prevents accidental Pastebin spam on production servers.
+  allow_test_paste: false
   # Paste title prefix
   paste_name_prefix: "Matchbook Export"
   # 0=public, 1=unlisted (recommended)
@@ -76,6 +79,13 @@ export_upload:
     api_dev_key: ""
     # Optional: create pastes under a Pastebin account (requires generating an api_user_key)
     api_user_key: ""
+
+
+# Placeholder reliability settings
+placeholder:
+  # How long (in seconds) to keep a "last known" match code for players after a match ends.
+  # This helps scoreboards that keep placeholders visible during end screens / transitions.
+  grace_seconds: 60
 
 
 logging:

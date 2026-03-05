@@ -55,6 +55,24 @@ public final class MatchSession {
 
     private final Set<UUID> participants = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Players who joined the arena as spectators (watching) and were never part of a team.
+     *
+     * Important distinction:
+     *  - A real participant who later dies will become a spectator in-game, but MUST still count.
+     *  - A "spectator-only" viewer (never on a team) must NOT be included in match stats/exports.
+     */
+    private final Set<UUID> spectatorOnly = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Players who have entered the arena context (typically lobby) but have NOT yet been assigned a team.
+     *
+     * This is important because MBedwars can briefly report team == null during lobby/assignment.
+     * We don't want to count these as participants unless they actually get a team or generate match activity.
+     */
+    private final Set<UUID> pendingParticipants = ConcurrentHashMap.newKeySet();
+
+
     private final ConcurrentMap<UUID, Team> teamByPlayer = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, String> usernameByPlayer = new ConcurrentHashMap<>();
 
@@ -81,12 +99,65 @@ public final class MatchSession {
         participants.add(uuid);
     }
 
-    public Set<UUID> getParticipants() {
+    public void markSpectatorOnly(UUID uuid) {
+        if (uuid == null) return;
+        spectatorOnly.add(uuid);
+    }
+
+    public void unmarkSpectatorOnly(UUID uuid) {
+        if (uuid == null) return;
+        spectatorOnly.remove(uuid);
+    }
+
+    public boolean isSpectatorOnly(UUID uuid) {
+        return uuid != null && spectatorOnly.contains(uuid);
+    }
+
+    
+    public void markPending(UUID uuid) {
+        if (uuid == null) return;
+        pendingParticipants.add(uuid);
+    }
+
+    public void unmarkPending(UUID uuid) {
+        if (uuid == null) return;
+        pendingParticipants.remove(uuid);
+    }
+
+    public boolean isPending(UUID uuid) {
+        return uuid != null && pendingParticipants.contains(uuid);
+    }
+
+    public Set<UUID> getSpectatorOnly() {
+        return spectatorOnly;
+    }
+
+    /**
+     * Promote a player to a real participant.
+     *
+     * Rule: a "participant" is someone who has EVER had a team in this match (even if later spectating).
+     */
+    public void promoteToParticipant(UUID uuid, Team team) {
+        if (uuid == null) return;
+        unmarkSpectatorOnly(uuid);
+        unmarkPending(uuid);
+        addParticipant(uuid);
+        if (team != null) setTeam(uuid, team);
+    }
+
+public Set<UUID> getParticipants() {
         return participants;
     }
 
     public void setTeam(UUID uuid, Team team) {
-        if (team != null) teamByPlayer.put(uuid, team);
+        if (uuid == null) return;
+        if (team != null) {
+            teamByPlayer.put(uuid, team);
+            // If the player was pending or spectator-only, they are now a real participant.
+            unmarkSpectatorOnly(uuid);
+            unmarkPending(uuid);
+            participants.add(uuid);
+        }
     }
 
     public Team getTeam(UUID uuid) {
@@ -246,6 +317,14 @@ public final class MatchSession {
     public void setPlacementIfAbsent(Team team, int place) {
         if (team == null || place <= 0) return;
         placementByTeam.putIfAbsent(team, place);
+    }
+
+    /**
+     * Force-set a placement (overwrites existing). Used for tie handling.
+     */
+    public void setPlacement(Team team, int place) {
+        if (team == null || place <= 0) return;
+        placementByTeam.put(team, place);
     }
 
     /**

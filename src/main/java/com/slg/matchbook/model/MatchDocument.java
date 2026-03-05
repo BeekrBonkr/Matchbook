@@ -19,6 +19,8 @@ public record MatchDocument(
         String result,
         Long startSnapshotTakenUnix,
         List<UUID> participants,
+        List<UUID> spectators,
+        Map<UUID, String> spectatorUsernames,
         Map<UUID, PlayerEntry> players,
         List<String> warnings
 ) {
@@ -38,11 +40,31 @@ public record MatchDocument(
 
         long endUnix = session.endUnix != null ? session.endUnix : (System.currentTimeMillis() / 1000L);
 
-        List<UUID> participants = new ArrayList<>(session.getParticipants());
+        // Exclude "spectator-only" viewers (never on a team).
+        List<UUID> participants = new ArrayList<>();
+        for (UUID u : session.getParticipants()) {
+            if (session.isSpectatorOnly(u)) continue;
+            participants.add(u);
+        }
         // stable order
         participants.sort(Comparator.comparing(UUID::toString));
 
+        // Spectator-only viewers (never on a team) are tracked separately.
+        List<UUID> spectators = new ArrayList<>();
+        for (UUID u : session.getSpectatorOnly()) {
+            if (session.isSpectatorOnly(u)) spectators.add(u);
+        }
+        spectators.sort(Comparator.comparing(UUID::toString));
+
+        // Preserve usernames for spectators (for GUI display).
+        Map<UUID, String> spectatorUsernames = new LinkedHashMap<>();
+        for (UUID u : spectators) {
+            String name = session.getUsername(u);
+            spectatorUsernames.put(u, (name != null && !name.isBlank()) ? name : u.toString());
+        }
+
         Map<UUID, PlayerEntry> players = new LinkedHashMap<>();
+
         List<String> warnings = new ArrayList<>();
 
         boolean tie = result != null && result.equalsIgnoreCase("TIE");
@@ -105,6 +127,8 @@ public record MatchDocument(
                 result != null ? result : "UNKNOWN",
                 session.startSnapshotTakenUnix,
                 List.copyOf(participants),
+                List.copyOf(spectators),
+                Collections.unmodifiableMap(spectatorUsernames),
                 Collections.unmodifiableMap(players),
                 warnings.isEmpty() ? null : List.copyOf(warnings)
         );

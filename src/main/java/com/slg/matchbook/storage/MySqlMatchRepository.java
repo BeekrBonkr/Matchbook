@@ -88,6 +88,24 @@ public final class MySqlMatchRepository implements MatchRepository {
         }
     }
 
+    @Override
+    public HealthCheckResult healthCheck() {
+        if (ds == null) {
+            return HealthCheckResult.fail("MySQL storage: datasource not initialized");
+        }
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement("SELECT 1");
+             ResultSet rs = ps.executeQuery()) {
+
+            boolean ok = rs.next();
+            return ok
+                    ? HealthCheckResult.ok("MySQL storage: OK")
+                    : HealthCheckResult.fail("MySQL storage: SELECT 1 returned no rows");
+        } catch (Exception e) {
+            return HealthCheckResult.fail("MySQL storage: " + e.getMessage());
+        }
+    }
+
     private void ensureSchema() throws SQLException {
         String matches = prefix + "matches";
         String pidx = prefix + "player_matches";

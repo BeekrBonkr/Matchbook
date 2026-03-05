@@ -158,6 +158,9 @@ public final class MatchesGui implements Listener {
         String result = yml.getString("match.result", "");
         long startUnix = yml.getLong("match.start_unix", 0L);
 
+        int participantCount = yml.getStringList("match.participants").size();
+        int spectatorCount = yml.getStringList("match.spectators").size();
+
         // Determine viewer’s team + outcome (past tense)
         String viewerBase = "players." + viewerUuid;
         String viewerTeam = yml.getString(viewerBase + ".team", "");
@@ -176,6 +179,8 @@ public final class MatchesGui implements Listener {
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + "Arena: " + ChatColor.WHITE + arena);
         lore.add(ChatColor.GRAY + "When: " + ChatColor.WHITE + formatUnix(startUnix));
+        lore.add(ChatColor.GRAY + "Players: " + ChatColor.WHITE + participantCount
+                + ChatColor.DARK_GRAY + " • " + ChatColor.GRAY + "Spectators: " + ChatColor.WHITE + spectatorCount);
         lore.add("");
 
         // One stat per line

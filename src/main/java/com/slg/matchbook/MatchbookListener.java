@@ -126,10 +126,17 @@ public final class MatchbookListener implements Listener {
             // Try spectator lookup for scoreboards / hubs that show match code while spectating.
             arena = findArenaBySpectator(player);
         }
-        if (arena == null) return "";
+        if (arena != null) {
+            // Ensure a session exists so the match code is stable even for spectators.
+            MatchSession session = lifecycle.getOrCreateSession(arena, "placeholder");
+            if (session != null) {
+                lifecycle.cacheMatchId(player.getUniqueId(), arena.getName(), session.matchId);
+                return session.matchId;
+            }
+        }
 
-        MatchSession session = lifecycle.getSession(arena.getName());
-        return session != null ? session.matchId : "";
+        // Fallback: shortly after RoundEnd, players may still be shown in scoreboards.
+        return lifecycle.getCachedMatchId(player.getUniqueId());
     }
 
     private Arena findArenaBySpectator(Player player) {

@@ -40,6 +40,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
     private static final String PERM_HELP = "mb.command.help";
     private static final String PERM_RELOAD = "mb.command.reload";
     private static final String PERM_STATSKEYS = "mb.command.statskeys";
+    private static final String PERM_TEST = "mb.command.test";
 
     private final MatchbookPlugin plugin;
     private final MatchExporter exporter;
@@ -263,6 +264,46 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
 
+            case "test", "testconnections", "health" -> {
+                if (!canAdmin(sender, PERM_TEST) && !sender.hasPermission("matchbook.admin")) {
+                    deny(sender);
+                    return true;
+                }
+
+                boolean testPastebin = false;
+                for (String a : args) {
+                    if (a.equalsIgnoreCase("--pastebin") || a.equalsIgnoreCase("--paste") || a.equalsIgnoreCase("-p")) {
+                        testPastebin = true;
+                        break;
+                    }
+                }
+
+                sender.sendMessage(ChatColor.GRAY + "Running connection tests... (this runs async)");
+
+                boolean finalTestPastebin = testPastebin;
+                org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    var repoResult = plugin.getRepo().healthCheck();
+                    var pasteResult = finalTestPastebin ? testPastebinConnection() : null;
+
+                    org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                        sender.sendMessage(ChatColor.YELLOW + "Matchbook health checks:");
+                        sender.sendMessage(colorizeResult("Storage", repoResult.ok(), repoResult.message()));
+
+                        if (finalTestPastebin) {
+                            if (pasteResult == null) {
+                                sender.sendMessage(colorizeResult("Pastebin", false, "Pastebin test failed: unknown error"));
+                            } else {
+                                sender.sendMessage(colorizeResult("Pastebin", pasteResult.ok, pasteResult.message));
+                            }
+                        } else {
+                            sender.sendMessage(ChatColor.DARK_GRAY + "Pastebin: (skipped) use --pastebin to test");
+                        }
+                    });
+                });
+
+                return true;
+            }
+
             case "statskeys", "discover", "discoverstats" -> {
                 if (!canAdmin(sender, PERM_STATSKEYS) && !sender.hasPermission("matchbook.admin")) {
                     deny(sender);
@@ -332,6 +373,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
             if (canAdmin(sender, PERM_MIGRATE) || sender.hasPermission("matchbook.migrate") || sender.hasPermission("matchbook.admin")) subs.add("migrate");
             if (canAdmin(sender, PERM_RELOAD) || sender.hasPermission("matchbook.admin")) subs.add("reload");
             if (canAdmin(sender, PERM_STATSKEYS)) subs.add("statskeys");
+            if (canAdmin(sender, PERM_TEST) || sender.hasPermission("matchbook.admin")) subs.add("test");
 
             return filterPrefix(subs, partial);
         }
@@ -342,6 +384,10 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
 
             if (sub.equals("migrate")) {
                 return filterPrefix(List.of("yaml2mysql", "mysql2yaml", "--dry-run"), partial);
+            }
+
+            if (sub.equals("test")) {
+                return filterPrefix(List.of("--pastebin"), partial);
             }
 
             if (sub.equals("statskeys")) {
@@ -410,6 +456,11 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
             any = true;
         }
 
+        if (canAdmin(sender, PERM_TEST) || sender.hasPermission("matchbook.admin")) {
+            sender.sendMessage(ChatColor.GRAY + " - /" + label + " test [--pastebin]" + ChatColor.DARK_GRAY + "  (test storage/pastebin)");
+            any = true;
+        }
+
         if (!any) {
             sender.sendMessage(ChatColor.RED + "No commands available (missing permissions).");
         }
@@ -417,6 +468,39 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
 
     private static void deny(CommandSender sender) {
         sender.sendMessage(ChatColor.RED + "You don't have permission to do that.");
+    }
+
+    private static String colorizeResult(String label, boolean ok, String message) {
+        ChatColor c = ok ? ChatColor.GREEN : ChatColor.RED;
+        String m = message == null ? "" : message;
+        return ChatColor.GRAY + " - " + label + ": " + c + (ok ? "OK" : "FAIL") + ChatColor.DARK_GRAY + "  " + ChatColor.GRAY + m;
+    }
+
+    private record SimpleResult(boolean ok, String message) {}
+
+    private SimpleResult testPastebinConnection() {
+        try {
+            var yml = plugin.getMatchbookConfig().raw();
+            boolean enabled = yml.getBoolean("export_upload.enabled", false);
+            if (!enabled) {
+                return new SimpleResult(false, "export_upload.enabled is false");
+            }
+
+            boolean allowTest = yml.getBoolean("export_upload.allow_test_paste", false);
+            if (!allowTest) {
+                return new SimpleResult(false, "export_upload.allow_test_paste is false (refusing to create a real paste)");
+            }
+
+            String devKey = yml.getString("export_upload.pastebin.api_dev_key", "");
+            String userKey = yml.getString("export_upload.pastebin.api_user_key", "");
+            PastebinUploader uploader = new PastebinUploader(devKey, userKey);
+
+            String content = "matchbook_connection_test,ok\n" + System.currentTimeMillis();
+            String url = uploader.upload(content, "Matchbook Connection Test", true, "10M");
+            return new SimpleResult(true, "Created test paste: " + url);
+        } catch (Exception e) {
+            return new SimpleResult(false, e.getMessage());
+        }
     }
 
     private static boolean canDefault(CommandSender sender, String specificNode) {

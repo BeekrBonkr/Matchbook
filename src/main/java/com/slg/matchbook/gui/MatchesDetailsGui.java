@@ -25,6 +25,7 @@ public final class MatchesDetailsGui implements Listener {
     private static final int PAGE_SLOTS = 45; // 0..44
     private static final int SLOT_PREV = 45;
     private static final int SLOT_BACK = 49;
+    private static final int SLOT_SPECTATORS = 47;
     private static final int SLOT_NEXT = 53;
 
     private final MatchbookPlugin plugin;
@@ -56,6 +57,7 @@ public final class MatchesDetailsGui implements Listener {
         inv.setItem(SLOT_PREV, button(Material.ARROW, ChatColor.YELLOW + "Previous Page"));
         inv.setItem(SLOT_NEXT, button(Material.ARROW, ChatColor.YELLOW + "Next Page"));
         inv.setItem(SLOT_BACK, button(Material.ARROW, ChatColor.YELLOW + "Back"));
+        inv.setItem(SLOT_SPECTATORS, buildSpectatorsItem(yml));
 
         if (yml == null) {
             inv.setItem(22, errorItem("Match not found", matchId));
@@ -88,6 +90,7 @@ public final class MatchesDetailsGui implements Listener {
         inv.setItem(SLOT_PREV, button(Material.ARROW, ChatColor.YELLOW + "Previous Page"));
         inv.setItem(SLOT_NEXT, button(Material.ARROW, ChatColor.YELLOW + "Next Page"));
         inv.setItem(SLOT_BACK, button(Material.ARROW, ChatColor.YELLOW + "Back"));
+        inv.setItem(SLOT_SPECTATORS, buildSpectatorsItem(yml));
         inv.setItem(4, buildHeaderItem(yml));
 
         int start = p * PAGE_SLOTS;
@@ -125,6 +128,40 @@ public final class MatchesDetailsGui implements Listener {
         lore.add(ChatColor.GRAY + "End: " + ChatColor.WHITE + formatUnix(endUnix));
         lore.add("");
         lore.add(ChatColor.DARK_GRAY + "Players listed below (colored by team)");
+
+        meta.setLore(lore);
+        it.setItemMeta(meta);
+        return it;
+    }
+
+
+    private ItemStack buildSpectatorsItem(YamlConfiguration yml) {
+        List<String> specs = yml != null ? yml.getStringList("match.spectators") : Collections.emptyList();
+        int count = specs != null ? specs.size() : 0;
+
+        ItemStack it = new ItemStack(Material.SPYGLASS);
+        ItemMeta meta = it.getItemMeta();
+        meta.setDisplayName(ChatColor.AQUA + "Spectators" + ChatColor.DARK_GRAY + " • " + ChatColor.WHITE + count);
+
+        List<String> lore = new ArrayList<>();
+        lore.add(ChatColor.GRAY + "Players watching (not counted in stats)");
+        lore.add("");
+
+        if (count <= 0) {
+            lore.add(ChatColor.DARK_GRAY + "None");
+        } else {
+            int shown = 0;
+            for (String uuidStr : specs) {
+                if (uuidStr == null || uuidStr.isBlank()) continue;
+                String name = yml.getString("spectators." + uuidStr + ".username", uuidStr);
+                lore.add(ChatColor.GRAY + "• " + ChatColor.WHITE + name);
+                shown++;
+                if (shown >= 12) break;
+            }
+            if (count > shown) {
+                lore.add(ChatColor.DARK_GRAY + "+" + (count - shown) + " more...");
+            }
+        }
 
         meta.setLore(lore);
         it.setItemMeta(meta);
@@ -257,7 +294,8 @@ public final class MatchesDetailsGui implements Listener {
         return switch (team.toUpperCase(Locale.ROOT)) {
             case "RED" -> Material.RED_WOOL;
             case "BLUE" -> Material.BLUE_WOOL;
-            case "GREEN" -> Material.GREEN_WOOL;
+            // Bedwars "GREEN" is typically represented as lime in-game.
+            case "GREEN", "LIME", "LIGHT_GREEN", "LIGHTGREEN" -> Material.LIME_WOOL;
             case "YELLOW" -> Material.YELLOW_WOOL;
             case "PINK" -> Material.PINK_WOOL;
             case "AQUA", "CYAN" -> Material.CYAN_WOOL;

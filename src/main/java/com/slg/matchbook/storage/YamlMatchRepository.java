@@ -24,6 +24,27 @@ public final class YamlMatchRepository implements MatchRepository {
     @Override public void shutdown() {}
 
     @Override
+    public HealthCheckResult healthCheck() {
+        try {
+            File root = plugin.getAddonDataFolder();
+            if (!root.exists() && !root.mkdirs()) {
+                return HealthCheckResult.fail("YAML storage: could not create data folder: " + root.getAbsolutePath());
+            }
+
+            File matchesDir = new File(root, "matches");
+            if (!matchesDir.exists() && !matchesDir.mkdirs()) {
+                return HealthCheckResult.fail("YAML storage: could not create matches folder: " + matchesDir.getAbsolutePath());
+            }
+            if (!matchesDir.canWrite()) {
+                return HealthCheckResult.fail("YAML storage: matches folder is not writable: " + matchesDir.getAbsolutePath());
+            }
+            return HealthCheckResult.ok("YAML storage: OK (" + matchesDir.getAbsolutePath() + ")");
+        } catch (Exception e) {
+            return HealthCheckResult.fail("YAML storage: " + e.getMessage());
+        }
+    }
+
+    @Override
     public void saveMatch(MatchDocument doc) throws IOException {
         storage.saveMatchYaml(doc);
     }

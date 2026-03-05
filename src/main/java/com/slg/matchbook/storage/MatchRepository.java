@@ -37,4 +37,12 @@ public interface MatchRepository {
      * Used by /mb all and for admin review.
      */
     List<String> listAllMatchIds();
+
+    /**
+     * Lightweight health check for admin tooling.
+     * Implementations should avoid heavy work; a simple "can I read/write" or "SELECT 1" is ideal.
+     */
+    default HealthCheckResult healthCheck() {
+        return new HealthCheckResult(true, "OK");
+    }
 }

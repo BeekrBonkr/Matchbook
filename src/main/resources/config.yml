@@ -1,5 +1,5 @@
 # Do not change this!!!
-config-version: "0.0.6"
+config-version: "0.0.7"
 
 # Matchbook configuration
 
@@ -97,3 +97,12 @@ rejoin:
   disable_on_leave: true
   disable_on_teleport: true
   disable_on_switch_arena: true
+
+# Party settings — requires a parties plugin hooked into MBedwars (e.g. Party+Friends).
+party:
+  # When the party leader joins a lobby arena, automatically move all online party members
+  # into the same arena. Members already in any arena are skipped.
+  follow_leader_to_arena: false
+  # Delay in ticks before moving members after the leader joins.
+  # A small delay avoids races with arena-join processing.
+  follow_delay_ticks: 5

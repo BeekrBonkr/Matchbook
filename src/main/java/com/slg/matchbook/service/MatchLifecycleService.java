@@ -597,6 +597,65 @@ public final class MatchLifecycleService {
         }
     }
 
+    /**
+     * Called when MBedwars confirms a team has been fully eliminated.
+     * This is the most reliable placement signal — it fires after both bed destruction
+     * and all member deaths have been resolved, regardless of the order events arrive.
+     */
+    public void onTeamEliminate(Arena arena, Team eliminatedTeam) {
+        if (arena == null || eliminatedTeam == null) return;
+        MatchSession session = sessionsByArena.get(arena.getName());
+        if (session == null) return;
+
+        // Treat as bed-lost even if we missed the bed break event.
+        session.bedLostTeams.add(eliminatedTeam);
+
+        // Mark all alive players on this team as finally dead.
+        Set<UUID> alive = new HashSet<>(session.alivePlayersByTeam.getOrDefault(eliminatedTeam, Set.of()));
+        for (UUID uuid : alive) {
+            session.markPlayerFinalDead(eliminatedTeam, uuid);
+        }
+
+        maybeMarkTeamEliminated(arena, session, eliminatedTeam);
+    }
+
+    /**
+     * Called when a spectator who was never a real participant joins an arena.
+     * Reasons LOSE and DEATH indicate an eliminated player becoming an in-game spectator;
+     * those are handled via onIngameDeath and must not be marked spectator-only.
+     */
+    public void onSpectatorJoinExternal(Arena arena, Player player) {
+        if (arena == null || player == null) return;
+        MatchSession session = sessionsByArena.get(arena.getName());
+        if (session == null) return;
+
+        UUID uuid = player.getUniqueId();
+        // If the player already has a team in this match they're a real participant.
+        if (session.getTeam(uuid) != null) return;
+
+        session.markSpectatorOnly(uuid);
+        session.unmarkPending(uuid);
+        session.setUsername(uuid, player.getName());
+        cacheMatchId(uuid, arena.getName(), session.matchId);
+    }
+
+    /**
+     * Called when MBedwars assigns or changes a player's team (e.g. during lobby assignment).
+     * Promotes pending players to real participants the moment they receive a team.
+     */
+    public void onPlayerTeamAssigned(Arena arena, Player player, Team newTeam) {
+        if (arena == null || player == null || newTeam == null) return;
+        MatchSession session = sessionsByArena.get(arena.getName());
+        if (session == null) return;
+
+        UUID uuid = player.getUniqueId();
+        session.promoteToParticipant(uuid, newTeam);
+        session.setUsername(uuid, player.getName());
+        session.markTeamParticipating(newTeam);
+        session.markPlayerAlive(newTeam, uuid);
+        cacheMatchId(uuid, arena.getName(), session.matchId);
+    }
+
     public void onBedBreak(Arena arena, Player breaker, Team bedTeam) {
         if (arena == null || breaker == null) return;
         MatchSession session = sessionsByArena.get(arena.getName());

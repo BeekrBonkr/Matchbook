@@ -8,6 +8,7 @@ import com.slg.matchbook.gui.MatchesGui;
 import com.slg.matchbook.placeholders.MatchbookExpansion;
 import com.slg.matchbook.storage.MatchRepository;
 import com.slg.matchbook.service.MatchLifecycleService;
+import com.slg.matchbook.service.PartyFollowService;
 import de.marcely.bedwars.api.BedwarsAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -87,7 +88,8 @@ public final class MatchbookPlugin extends JavaPlugin {
 
         BedwarsAPI.onReady(() -> {
             this.lifecycle = new MatchLifecycleService(this);
-            this.listener = new MatchbookListener(this, lifecycle);
+            PartyFollowService partyFollow = new PartyFollowService(this);
+            this.listener = new MatchbookListener(this, lifecycle, partyFollow);
             Bukkit.getPluginManager().registerEvents(listener, this);
 
             // GUI

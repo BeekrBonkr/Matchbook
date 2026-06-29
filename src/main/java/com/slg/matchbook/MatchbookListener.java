@@ -1,23 +1,28 @@
 package com.slg.matchbook;
 
 import com.slg.matchbook.service.MatchLifecycleService;
+import com.slg.matchbook.service.PartyFollowService;
 import de.marcely.bedwars.api.BedwarsAPI;
 import de.marcely.bedwars.api.arena.Arena;
+import de.marcely.bedwars.api.arena.ArenaStatus;
+import de.marcely.bedwars.api.arena.Team;
 import de.marcely.bedwars.api.event.arena.ArenaBedBreakEvent;
 import de.marcely.bedwars.api.event.arena.ArenaWinningTeamDetermineEvent;
 import de.marcely.bedwars.api.event.arena.RoundEndEvent;
 import de.marcely.bedwars.api.event.arena.RoundStartEvent;
+import de.marcely.bedwars.api.event.arena.TeamEliminateEvent;
 import de.marcely.bedwars.api.event.player.PlayerIngameDeathEvent;
 import de.marcely.bedwars.api.event.player.PlayerJoinArenaEvent;
 import de.marcely.bedwars.api.event.player.PlayerKillPlayerEvent;
 import de.marcely.bedwars.api.event.player.PlayerQuitArenaEvent;
+import de.marcely.bedwars.api.event.player.PlayerTeamChangeEvent;
+import de.marcely.bedwars.api.event.player.SpectatorJoinArenaEvent;
+import de.marcely.bedwars.api.game.spectator.SpectateReason;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-
-import java.util.Collection;
 
 /**
  * Bridges MBedwars events to the lifecycle service.
@@ -26,21 +31,27 @@ public final class MatchbookListener implements Listener {
 
     private final MatchbookPlugin plugin;
     private final MatchLifecycleService lifecycle;
+    private final PartyFollowService partyFollow;
 
-    public MatchbookListener(MatchbookPlugin plugin, MatchLifecycleService lifecycle) {
+    public MatchbookListener(MatchbookPlugin plugin, MatchLifecycleService lifecycle, PartyFollowService partyFollow) {
         this.plugin = plugin;
         this.lifecycle = lifecycle;
+        this.partyFollow = partyFollow;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onRoundStart(RoundStartEvent e) {
-        Arena arena = e.getArena();
-        lifecycle.onRoundStart(arena);
+        lifecycle.onRoundStart(e.getArena());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerJoinArena(PlayerJoinArenaEvent e) {
         lifecycle.onPlayerJoinArena(e.getArena(), e.getPlayer());
+
+        // Party follow: when the leader joins a lobby, pull their party members in.
+        if (e.getArena().getStatus() == ArenaStatus.LOBBY) {
+            partyFollow.onPlayerJoinLobby(e.getArena(), e.getPlayer());
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -50,7 +61,6 @@ public final class MatchbookListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onWinningTeamDetermine(ArenaWinningTeamDetermineEvent e) {
-        // Winner may be null on tie.
         lifecycle.onArenaWinningTeam(e.getArena(), e.getWinningTeam());
     }
 
@@ -60,13 +70,45 @@ public final class MatchbookListener implements Listener {
     }
 
     /**
+     * Direct placement signal: fires once a team's bed is gone and all its players are dead.
+     * More reliable than deriving elimination from the bed-break + per-death chain alone.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onTeamEliminate(TeamEliminateEvent e) {
+        lifecycle.onTeamEliminate(e.getArena(), e.getTeam());
+    }
+
+    /**
+     * Reliable spectator classification.
+     * LOSE/DEATH = eliminated participant becoming in-game spectator (still a real participant).
+     * Anything else = external viewer who should not be counted in match stats.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onSpectatorJoin(SpectatorJoinArenaEvent e) {
+        SpectateReason reason = e.getReason();
+        if (reason == SpectateReason.LOSE || reason == SpectateReason.DEATH) return;
+        lifecycle.onSpectatorJoinExternal(e.getArena(), e.getPlayer());
+    }
+
+    /**
+     * Promotes pending players the moment MBedwars assigns them a team.
+     * Fixes the race window where lobby-phase players had no team yet.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPlayerTeamChange(PlayerTeamChangeEvent e) {
+        Team newTeam = e.getNewTeam();
+        if (newTeam == null) return; // team removed, not assigned
+        lifecycle.onPlayerTeamAssigned(e.getArena(), e.getPlayer(), newTeam);
+    }
+
+    /**
      * Increment death counters reliably (covers void/fall/etc. too).
      */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onIngameDeath(PlayerIngameDeathEvent e) {
-        // Some platforms may fire async; keep lifecycle state changes on the main thread.
         if (e.isAsynchronous()) {
-            Bukkit.getScheduler().runTask(plugin, () -> lifecycle.onIngameDeath(e.getArena(), e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats()));
+            Bukkit.getScheduler().runTask(plugin, () ->
+                    lifecycle.onIngameDeath(e.getArena(), e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats()));
             return;
         }
         lifecycle.onIngameDeath(e.getArena(), e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats());
@@ -78,14 +120,16 @@ public final class MatchbookListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKill(PlayerKillPlayerEvent e) {
         if (e.isAsynchronous()) {
-            Bukkit.getScheduler().runTask(plugin, () -> lifecycle.onKill(e.getArena(), e.getKiller(), e.isFatalDeath(), e.isCountingKillStats()));
+            Bukkit.getScheduler().runTask(plugin, () ->
+                    lifecycle.onKill(e.getArena(), e.getKiller(), e.isFatalDeath(), e.isCountingKillStats()));
             return;
         }
         lifecycle.onKill(e.getArena(), e.getKiller(), e.isFatalDeath(), e.isCountingKillStats());
     }
 
     /**
-     * Track bed breaks.
+     * Track bed breaks. MONITOR (not ignoreCancelled) so we catch the team even on cancelled breaks
+     * for placement purposes — only the result=CANCEL check below gates stat recording.
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onBedBreak(ArenaBedBreakEvent e) {
@@ -97,20 +141,22 @@ public final class MatchbookListener implements Listener {
     }
 
     private void handleBedBreak(ArenaBedBreakEvent e) {
-        if (e.getResult() != ArenaBedBreakEvent.Result.CANCEL && e.isPlayerCaused()) {
-            Player p = e.getPlayer();
-            if (p != null) {
-                // Also try to determine WHICH team's bed was broken for placement tracking.
-                // Different MBedwars versions expose different method names, so use reflection.
-                de.marcely.bedwars.api.arena.Team bedTeam = null;
-                try {
-                    var m = e.getClass().getMethod("getTeam");
-                    Object o = m.invoke(e);
-                    if (o instanceof de.marcely.bedwars.api.arena.Team t) bedTeam = t;
-                } catch (Throwable ignored) {}
-                lifecycle.onBedBreak(e.getArena(), p, bedTeam);
-            }
+        if (e.getResult() == ArenaBedBreakEvent.Result.CANCEL || !e.isPlayerCaused()) return;
+        Player p = e.getPlayer();
+        if (p == null) return;
+
+        // Try direct API call first; fall back to reflection for older MBedwars builds.
+        Team bedTeam = null;
+        try {
+            bedTeam = e.getTeam();
+        } catch (Throwable ignored) {
+            try {
+                var m = e.getClass().getMethod("getTeam");
+                Object o = m.invoke(e);
+                if (o instanceof Team t) bedTeam = t;
+            } catch (Throwable ignored2) {}
         }
+        lifecycle.onBedBreak(e.getArena(), p, bedTeam);
     }
 
     /**
@@ -123,11 +169,9 @@ public final class MatchbookListener implements Listener {
 
         Arena arena = BedwarsAPI.getGameAPI().getArenaByPlayer(player);
         if (arena == null) {
-            // Try spectator lookup for scoreboards / hubs that show match code while spectating.
             arena = findArenaBySpectator(player);
         }
         if (arena != null) {
-            // Ensure a session exists so the match code is stable even for spectators.
             MatchSession session = lifecycle.getOrCreateSession(arena, "placeholder");
             if (session != null) {
                 lifecycle.cacheMatchId(player.getUniqueId(), arena.getName(), session.matchId);
@@ -135,27 +179,20 @@ public final class MatchbookListener implements Listener {
             }
         }
 
-        // Fallback: shortly after RoundEnd, players may still be shown in scoreboards.
         return lifecycle.getCachedMatchId(player.getUniqueId());
     }
 
     private Arena findArenaBySpectator(Player player) {
+        // Direct API method (MBedwars 5.x).
         try {
-            // Newer MBedwars versions
-            var m = BedwarsAPI.getGameAPI().getClass().getMethod("getArenaBySpectator", Player.class);
-            Object o = m.invoke(BedwarsAPI.getGameAPI(), player);
-            if (o instanceof Arena a) return a;
+            Arena a = BedwarsAPI.getGameAPI().getArenaBySpectator(player);
+            if (a != null) return a;
         } catch (Throwable ignored) {}
 
+        // Fallback: iterate all arenas — handles edge cases and older builds.
         try {
-            // Fallback: iterate arenas and ask if the player is a spectator.
-            var mArenas = BedwarsAPI.getGameAPI().getClass().getMethod("getArenas");
-            Object o = mArenas.invoke(BedwarsAPI.getGameAPI());
-            if (o instanceof Iterable<?> it) {
-                for (Object aObj : it) {
-                    if (!(aObj instanceof Arena a)) continue;
-                    if (isSpectator(a, player)) return a;
-                }
+            for (Arena a : BedwarsAPI.getGameAPI().getArenas()) {
+                if (isSpectator(a, player)) return a;
             }
         } catch (Throwable ignored) {}
 
@@ -172,7 +209,7 @@ public final class MatchbookListener implements Listener {
         try {
             var m = arena.getClass().getMethod("getSpectators");
             Object o = m.invoke(arena);
-            if (o instanceof Collection<?> c) return c.contains(player);
+            if (o instanceof java.util.Collection<?> c) return c.contains(player);
         } catch (Throwable ignored) {}
 
         return false;

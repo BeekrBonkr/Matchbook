@@ -113,7 +113,17 @@ public record MatchDocument(
                         if (losesDiff == 0L) diff.put("bedwars:loses", 1L);
                         if (winsDiff != 0L) diff.put("bedwars:wins", 0L);
                     }
+                } else if (tie) {
+                    // Ties count as neither a win nor a loss — prevent MBedwars values from leaking through.
+                    if (diff.containsKey("bedwars:wins")) diff.put("bedwars:wins", 0L);
+                    if (diff.containsKey("bedwars:loses")) diff.put("bedwars:loses", 0L);
                 }
+            }
+
+            // Track ties as a first-class stat (mirrors how matchbook:*_place keys work).
+            if (tie) {
+                if (diff == null) diff = new LinkedHashMap<>();
+                diff.put("matchbook:ties", 1L);
             }
 
             players.put(u, new PlayerEntry(u, username, team, startTaken, start, end, diff));

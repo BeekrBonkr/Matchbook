@@ -13,7 +13,8 @@ public record RuntimeSettings(
         long startSnapshotDelayTicks,
         long endSnapshotDelayTicks,
         long snapshotTimeoutTicks,
-        ExportSettings export
+        ExportSettings export,
+        PartySettings party
 ) {
 
     public record ExportSettings(
@@ -24,5 +25,10 @@ public record RuntimeSettings(
              * If null/empty, exporter should fall back to smart defaults.
              */
             List<String> columns
+    ) {}
+
+    public record PartySettings(
+            boolean followLeaderToArena,
+            long followDelayTicks
     ) {}
 }

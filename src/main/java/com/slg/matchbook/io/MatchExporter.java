@@ -172,8 +172,9 @@ public final class MatchExporter {
     private List<String> resolveColumnsWithPlacements(List<YamlConfiguration> matchYmls) {
         List<String> base = new ArrayList<>(resolveColumns());
 
-        // Discover placement keys across all matches being exported.
+        // Discover matchbook-generated keys (placements + ties) across all matches being exported.
         Set<String> placementKeys = new HashSet<>();
+        boolean hasTies = false;
         if (matchYmls != null) {
             for (YamlConfiguration yml : matchYmls) {
                 if (yml == null) continue;
@@ -183,18 +184,19 @@ public final class MatchExporter {
                     for (String k : sec.getKeys(false)) {
                         if (k == null) continue;
                         if (k.startsWith("matchbook:") && k.endsWith("_place")) placementKeys.add(k);
+                        if (k.equals("matchbook:ties")) hasTies = true;
                     }
                 }
             }
         }
 
-        if (placementKeys.isEmpty()) return base;
+        if (placementKeys.isEmpty() && !hasTies) return base;
 
         // Sort placement keys by numeric rank (1st,2nd,3rd,4th...)
         List<String> sorted = new ArrayList<>(placementKeys);
         sorted.sort(Comparator.comparingInt(MatchExporter::placementKeyRank));
 
-        // Insert placement columns after username if possible, otherwise append.
+        // Insert matchbook columns after username if possible, otherwise append.
         int insertAt = -1;
         for (int i = 0; i < base.size(); i++) {
             if ("username".equalsIgnoreCase(base.get(i))) {
@@ -207,6 +209,7 @@ public final class MatchExporter {
         for (String k : sorted) {
             if (!base.contains(k)) base.add(insertAt++, k);
         }
+        if (hasTies && !base.contains("matchbook:ties")) base.add(insertAt, "matchbook:ties");
         return base;
     }
 

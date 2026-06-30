@@ -1,23 +1,49 @@
-# Do not change this!!!
-config-version: "0.0.7"
+# ============================================================
+#  Matchbook Configuration
+#  Plugin version: 0.5.0  |  Config version: 0.0.8
+#
+#  When you update the plugin, Matchbook will automatically:
+#    1. Back up your current config  (config.yml.bak-<version>-<date>)
+#    2. Add any new keys with default values
+#    3. Preserve all your existing settings
+#
+#  You should never need to edit config-version manually.
+# ============================================================
 
-# Matchbook configuration
+# Internal config schema version — do not change this.
+config-version: "0.0.8"
 
+# ============================================================
+#  Storage
+# ============================================================
 storage:
-  # yaml or mysql
+  # Backend for saving match data.
+  #   yaml  — flat files under plugins/MBedwars/add-ons/Matchbook/matches/
+  #           Suitable for small servers; no database required.
+  #   mysql — stores each match as a YAML document in a MySQL/MariaDB table.
+  #           Better for large servers or when you need shared access / backups.
   type: yaml
 
-  # When mysql is selected
+  # MySQL settings — only used when type is set to "mysql".
   mysql:
     host: "127.0.0.1"
     port: 3306
     database: "matchbook"
     username: "matchbook"
     password: "change_me"
-    # Optional: append URL params. Example: "useUnicode=true&characterEncoding=utf8"
+
+    # Optional JDBC URL parameters appended after the database name.
+    # Separate with & for multiple params.
+    # Example: "useUnicode=true&characterEncoding=utf8&useSSL=false"
     params: "useUnicode=true&characterEncoding=utf8&useSSL=false"
-    # Table prefix so multiple networks can share one DB.
+
+    # Table prefix — useful if multiple servers share one database.
+    # Tables created: <prefix>matches, <prefix>player_matches
     table_prefix: "matchbook_"
+
+    # Connection pool settings (HikariCP).
+    # These defaults are fine for most servers; raise maximum_pool_size
+    # if you have high concurrency (many simultaneous match saves).
     pool:
       maximum_pool_size: 10
       minimum_idle: 2
@@ -25,22 +51,40 @@ storage:
       idle_timeout_ms: 300000
       max_lifetime_ms: 1800000
 
+# ============================================================
+#  Match recording
+# ============================================================
 match:
-  # When MBedwars doesn't update win/loss quickly enough, enforce wins/loses from the match result.
-  # If a tie or aborted match, no wins/loses are forced.
+  # Enforce win/loss flags from the match result rather than relying solely on
+  # MBedwars incrementing bedwars:wins / bedwars:loses.
+  # Recommended: true — prevents stat contamination when MBedwars updates stats late.
   enforce_win_loss_from_result: true
 
-  # If enabled, when a match file is saved, print the match code in chat to all participants.
+  # Broadcast the match code in chat to all participants when a match file is saved.
+  # Useful so players can immediately use /mb view <code>.
   announce_match_code: true
 
-  # Limits for snapshot waiting/retry
+  # Delay in ticks before taking the "start snapshot" of player stats.
+  # A short delay lets MBedwars finish its own setup before Matchbook reads stats.
+  # 20 ticks = 1 second. Range: 0–1200.
   start_snapshot_delay_ticks: 20
+
+  # Delay in ticks before taking the "end snapshot" after a round ends.
+  # A short delay lets MBedwars commit final stat updates first.
   end_snapshot_delay_ticks: 10
+
+  # How many ticks to wait for MBedwars to report the match as RUNNING
+  # before giving up and trying to snapshot anyway. Range: 1–72000.
   running_wait_ticks_max: 100
+
+  # How long (in ticks) to wait for individual player stat callbacks before
+  # marking the snapshot as timed-out and continuing without that player.
   snapshot_timeout_ticks: 40
 
-  # Track these stat keys from MBedwars player data API
-  # Add more keys if you want; Matchbook will store them and export diffs if present.
+  # Stat keys to snapshot from MBedwars at match start and end.
+  # The diff (end - start) is what gets saved in each match file.
+  # Add extra keys from /mb statskeys if you want to track more.
+  # Remove keys you don't need to keep match files smaller.
   tracked_keys:
     - "bedwars:kills"
     - "bedwars:final_kills"
@@ -51,58 +95,86 @@ match:
     - "bedwars:loses"
     - "bedwars:beds_lost"
 
-# CSV export settings
-# If export.columns is omitted/empty, Matchbook will default to: uuid, username, team + match.tracked_keys
+# ============================================================
+#  CSV export  (/mb export <matchcode>)
+# ============================================================
 export:
+  # Columns to include in the exported CSV.
+  # Available meta columns:  uuid, username, team
+  # Available stat columns:  any key from match.tracked_keys (e.g. bedwars:kills)
+  # Placement columns are added automatically when present: matchbook:1st_place, etc.
+  #
+  # Leave empty to use smart defaults: uuid, username, team + all tracked_keys.
+  #
   # Example:
-  # columns:
-  #   - uuid
-  #   - username
-  #   - team
-  #   - bedwars:kills
-  #   - bedwars:deaths
+  #   columns:
+  #     - uuid
+  #     - username
+  #     - team
+  #     - bedwars:kills
+  #     - bedwars:final_kills
+  #     - bedwars:deaths
   columns: []
 
-# Upload CSV exports to Pastebin so players don't have to find files on disk
+# ============================================================
+#  Export upload (Pastebin)
+# ============================================================
 export_upload:
+  # Set to true to automatically upload CSV exports to Pastebin.
   enabled: false
-  # Safety: /matchbook test --pastebin will only create a real paste if this is true.
-  # This prevents accidental Pastebin spam on production servers.
+
+  # Safety guard: /mb test --pastebin will only create a real paste when this is true.
+  # Prevents accidental Pastebin spam on production servers during testing.
   allow_test_paste: false
-  # Paste title prefix
+
+  # Prefix added to each paste title. Final title: "<prefix> - <matchcode>"
   paste_name_prefix: "Matchbook Export"
-  # 0=public, 1=unlisted (recommended)
+
+  # Paste visibility: true = unlisted (recommended), false = public
   unlisted: true
-  # Paste expiry: N (never), 10M, 1H, 1D, 1W, 2W, 1M, 6M, 1Y
+
+  # Paste expiry.  Valid values: N (never), 10M, 1H, 1D, 1W, 2W, 1M, 6M, 1Y
   expire: "1W"
+
   pastebin:
+    # Your Pastebin developer API key (required).
+    # Get one at: https://pastebin.com/api
     api_dev_key: ""
-    # Optional: create pastes under a Pastebin account (requires generating an api_user_key)
+
+    # Optional: create pastes under a specific Pastebin account.
+    # Requires generating an api_user_key via the Pastebin API.
     api_user_key: ""
 
-
-# Placeholder reliability settings
+# ============================================================
+#  Placeholder reliability  (PlaceholderAPI)
+# ============================================================
 placeholder:
-  # How long (in seconds) to keep a "last known" match code for players after a match ends.
-  # This helps scoreboards that keep placeholders visible during end screens / transitions.
+  # Seconds to keep a player's last-known match code cached after a match ends.
+  # Scoreboards often keep showing placeholders during the end screen / transition,
+  # so this prevents %matchbook_matchcode% from going blank too early.
+  # Minimum: 5. Recommended: 30–120.
   grace_seconds: 60
 
-
+# ============================================================
+#  Logging
+# ============================================================
 logging:
+  # Set to true for verbose debug output in the server console.
+  # Useful when diagnosing issues; leave false on production.
   debug: false
 
-# Rejoin-memory can block players from joining other arenas while their old match is still running.
-# Matchbook can force-disable rejoin when players leave/teleport/switch arenas.
+# ============================================================
+#  Rejoin memory
+# ============================================================
+# MBedwars can remember a player's arena and prompt them to rejoin after disconnect.
+# When a player leaves mid-match and then joins a different arena, that rejoin memory
+# can block them. These settings let Matchbook auto-disable it on common transitions.
 rejoin:
+  # Disable rejoin when a player deliberately disconnects or uses /leave.
   disable_on_leave: true
-  disable_on_teleport: true
-  disable_on_switch_arena: true
 
-# Party settings — requires a parties plugin hooked into MBedwars (e.g. Party+Friends).
-party:
-  # When the party leader joins a lobby arena, automatically move all online party members
-  # into the same arena. Members already in any arena are skipped.
-  follow_leader_to_arena: false
-  # Delay in ticks before moving members after the leader joins.
-  # A small delay avoids races with arena-join processing.
-  follow_delay_ticks: 5
+  # Disable rejoin when a player is teleported out of an arena.
+  disable_on_teleport: true
+
+  # Disable rejoin when a player switches to a different arena.
+  disable_on_switch_arena: true

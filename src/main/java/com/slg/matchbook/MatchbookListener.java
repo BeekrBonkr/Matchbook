@@ -1,10 +1,8 @@
 package com.slg.matchbook;
 
 import com.slg.matchbook.service.MatchLifecycleService;
-import com.slg.matchbook.service.PartyFollowService;
 import de.marcely.bedwars.api.BedwarsAPI;
 import de.marcely.bedwars.api.arena.Arena;
-import de.marcely.bedwars.api.arena.ArenaStatus;
 import de.marcely.bedwars.api.arena.Team;
 import de.marcely.bedwars.api.event.arena.ArenaBedBreakEvent;
 import de.marcely.bedwars.api.event.arena.ArenaWinningTeamDetermineEvent;
@@ -31,12 +29,10 @@ public final class MatchbookListener implements Listener {
 
     private final MatchbookPlugin plugin;
     private final MatchLifecycleService lifecycle;
-    private final PartyFollowService partyFollow;
 
-    public MatchbookListener(MatchbookPlugin plugin, MatchLifecycleService lifecycle, PartyFollowService partyFollow) {
+    public MatchbookListener(MatchbookPlugin plugin, MatchLifecycleService lifecycle) {
         this.plugin = plugin;
         this.lifecycle = lifecycle;
-        this.partyFollow = partyFollow;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -47,11 +43,6 @@ public final class MatchbookListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerJoinArena(PlayerJoinArenaEvent e) {
         lifecycle.onPlayerJoinArena(e.getArena(), e.getPlayer());
-
-        // Party follow: when the leader joins a lobby, pull their party members in.
-        if (e.getArena().getStatus() == ArenaStatus.LOBBY) {
-            partyFollow.onPlayerJoinLobby(e.getArena(), e.getPlayer());
-        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -119,12 +110,17 @@ public final class MatchbookListener implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKill(PlayerKillPlayerEvent e) {
+        Player victim = tryGetVictim(e);
         if (e.isAsynchronous()) {
             Bukkit.getScheduler().runTask(plugin, () ->
-                    lifecycle.onKill(e.getArena(), e.getKiller(), e.isFatalDeath(), e.isCountingKillStats()));
+                    lifecycle.onKill(e.getArena(), e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats()));
             return;
         }
-        lifecycle.onKill(e.getArena(), e.getKiller(), e.isFatalDeath(), e.isCountingKillStats());
+        lifecycle.onKill(e.getArena(), e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats());
+    }
+
+    private static Player tryGetVictim(PlayerKillPlayerEvent e) {
+        try { return e.getPlayer(); } catch (Throwable ignored) { return null; }
     }
 
     /**

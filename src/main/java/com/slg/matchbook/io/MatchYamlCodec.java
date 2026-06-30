@@ -3,6 +3,7 @@ package com.slg.matchbook.io;
 import com.slg.matchbook.MatchSession;
 import com.slg.matchbook.StatSnapshot;
 import com.slg.matchbook.model.MatchDocument;
+import com.slg.matchbook.model.MatchEvent;
 import de.marcely.bedwars.api.arena.Team;
 import org.bukkit.configuration.file.YamlConfiguration;
 
@@ -72,7 +73,47 @@ public final class MatchYamlCodec {
             yml.set("match.warnings", doc.warnings());
         }
 
+        // Event log
+        if (doc.events() != null && !doc.events().isEmpty()) {
+            long startUnix = doc.startUnix();
+            List<Map<String, Object>> eventList = new ArrayList<>();
+            for (MatchEvent ev : doc.events()) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("type", ev.type().name());
+                m.put("timestamp", ev.timestamp());
+                m.put("offset", ev.offsetSeconds(startUnix));
+                if (ev.playerUuid() != null)  m.put("player_uuid", ev.playerUuid());
+                if (ev.playerName() != null)  m.put("player_name", ev.playerName());
+                if (ev.playerTeam() != null)  m.put("player_team", ev.playerTeam());
+                if (ev.killerUuid() != null)  m.put("killer_uuid", ev.killerUuid());
+                if (ev.killerName() != null)  m.put("killer_name", ev.killerName());
+                if (ev.killerTeam() != null)  m.put("killer_team", ev.killerTeam());
+                if (ev.bedTeam() != null)     m.put("bed_team", ev.bedTeam());
+                if (ev.isFinal())             m.put("final", true);
+                eventList.add(m);
+            }
+            yml.set("events", eventList);
+        }
+
         return yml;
+    }
+
+    /** Parse the events section from a loaded match YAML. Returns empty list if absent. */
+    public static List<Map<String, Object>> readRawEvents(YamlConfiguration yml) {
+        if (yml == null) return List.of();
+        List<?> raw = yml.getList("events");
+        if (raw == null || raw.isEmpty()) return List.of();
+
+        List<Map<String, Object>> out = new ArrayList<>(raw.size());
+        for (Object obj : raw) {
+            if (!(obj instanceof Map<?, ?> src)) continue;
+            Map<String, Object> ev = new LinkedHashMap<>();
+            for (var entry : src.entrySet()) {
+                if (entry.getKey() != null) ev.put(entry.getKey().toString(), entry.getValue());
+            }
+            out.add(ev);
+        }
+        return out;
     }
 
     public static String toYamlString(MatchSession session, String result) {

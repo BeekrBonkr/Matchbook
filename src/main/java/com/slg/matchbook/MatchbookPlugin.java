@@ -3,12 +3,12 @@ package com.slg.matchbook;
 import com.slg.matchbook.commands.MatchbookCommand;
 import com.slg.matchbook.config.RuntimeSettings;
 import com.slg.matchbook.config.StorageType;
+import com.slg.matchbook.gui.EventLogGui;
 import com.slg.matchbook.gui.MatchesDetailsGui;
 import com.slg.matchbook.gui.MatchesGui;
 import com.slg.matchbook.placeholders.MatchbookExpansion;
 import com.slg.matchbook.storage.MatchRepository;
 import com.slg.matchbook.service.MatchLifecycleService;
-import com.slg.matchbook.service.PartyFollowService;
 import de.marcely.bedwars.api.BedwarsAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -28,11 +28,13 @@ public final class MatchbookPlugin extends JavaPlugin {
     private MatchStorage storage;
     private MatchLifecycleService lifecycle;
     private MatchbookListener listener;
-        private MatchesDetailsGui detailsGui;
-        private MatchesGui matchesGui;
+    private MatchesDetailsGui detailsGui;
+    private MatchesGui matchesGui;
+    private EventLogGui eventLogGui;
 
-        public MatchesGui getMatchesGui() { return matchesGui; }
-        public MatchesDetailsGui getDetailsGui() { return detailsGui; }
+    public MatchesGui getMatchesGui()       { return matchesGui;   }
+    public MatchesDetailsGui getDetailsGui(){ return detailsGui;   }
+    public EventLogGui getEventLogGui()     { return eventLogGui;  }
 
     private File addonDataFolder;
 
@@ -88,16 +90,17 @@ public final class MatchbookPlugin extends JavaPlugin {
 
         BedwarsAPI.onReady(() -> {
             this.lifecycle = new MatchLifecycleService(this);
-            PartyFollowService partyFollow = new PartyFollowService(this);
-            this.listener = new MatchbookListener(this, lifecycle, partyFollow);
+            this.listener = new MatchbookListener(this, lifecycle);
             Bukkit.getPluginManager().registerEvents(listener, this);
 
             // GUI
-            this.detailsGui = new MatchesDetailsGui(this);
-            this.matchesGui = new MatchesGui(this, detailsGui);
+            this.detailsGui  = new MatchesDetailsGui(this);
+            this.matchesGui  = new MatchesGui(this, detailsGui);
+            this.eventLogGui = new EventLogGui(this);
 
-            Bukkit.getPluginManager().registerEvents(detailsGui, this);
-            Bukkit.getPluginManager().registerEvents(matchesGui, this);
+            Bukkit.getPluginManager().registerEvents(detailsGui,  this);
+            Bukkit.getPluginManager().registerEvents(matchesGui,  this);
+            Bukkit.getPluginManager().registerEvents(eventLogGui, this);
             // Command
             if (getCommand("matchbook") != null) {
                 MatchbookCommand cmd = new MatchbookCommand(this);

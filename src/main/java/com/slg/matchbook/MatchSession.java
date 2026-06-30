@@ -1,8 +1,12 @@
 package com.slg.matchbook;
 
+import com.slg.matchbook.model.MatchEvent;
 import de.marcely.bedwars.api.arena.Team;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -88,6 +92,11 @@ public final class MatchSession {
     // This is used as a backstop for key stats (kills/deaths/bed breaks) and as the persistence trigger.
     private final ConcurrentMap<UUID, ConcurrentMap<String, LongAdder>> triggerIncrements = new ConcurrentHashMap<>();
     private final AtomicBoolean triggerActivity = new AtomicBoolean(false);
+
+    // Event log — every discrete in-match event in chronological order.
+    private final List<MatchEvent> events = Collections.synchronizedList(new ArrayList<>());
+    // Deduplicates join events when both PlayerJoinArenaEvent and SpectatorJoinArenaEvent fire.
+    private final Set<UUID> joinEventLogged = ConcurrentHashMap.newKeySet();
 
     public MatchSession(String matchId, String arenaName, long startUnix) {
         this.matchId = matchId;
@@ -309,6 +318,29 @@ public Set<UUID> getParticipants() {
 
     public int totalTeams() {
         return Math.max(0, participatingTeams.size());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Event log
+    // ---------------------------------------------------------------------------
+
+    public void addEvent(MatchEvent event) {
+        if (event != null) events.add(event);
+    }
+
+    /** Returns a snapshot of the event list safe to iterate off-thread. */
+    public List<MatchEvent> getEvents() {
+        synchronized (events) {
+            return new ArrayList<>(events);
+        }
+    }
+
+    /**
+     * Returns true the first time this uuid is logged as joining, false on subsequent calls.
+     * Used to prevent double-logging when both PlayerJoinArenaEvent and SpectatorJoinArenaEvent fire.
+     */
+    public boolean tryLogJoin(UUID uuid) {
+        return uuid != null && joinEventLogged.add(uuid);
     }
 
     /**

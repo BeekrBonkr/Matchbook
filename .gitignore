@@ -45,6 +45,9 @@ cache/
 *.local
 secrets.yml
 
+# --- Local Gradle toolchain overrides (machine-specific) ---
+gradle.properties
+
 # --- Maven/Gradle shading / bins (just in case) ---
 *.jar
 !gradle/wrapper/gradle-wrapper.jar

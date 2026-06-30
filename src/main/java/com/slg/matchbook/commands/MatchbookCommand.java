@@ -179,21 +179,31 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                                 return;
                             }
                             File finalOutFile = outFile;
+                            File eventsFile = exporter.exportMatchEventsToCsv(matchCodes.get(0));
                             org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
                                 sender.sendMessage(ChatColor.GREEN + "Exported match " + ChatColor.WHITE + matchCodes.get(0));
-                                sender.sendMessage(ChatColor.GRAY + "Saved to: " + finalOutFile.getAbsolutePath());
+                                sender.sendMessage(ChatColor.GRAY + "Stats:  " + finalOutFile.getAbsolutePath());
+                                if (eventsFile != null) {
+                                    sender.sendMessage(ChatColor.GRAY + "Events: " + eventsFile.getAbsolutePath());
+                                } else {
+                                    sender.sendMessage(ChatColor.DARK_GRAY + "(No event log recorded for this match)");
+                                }
                             });
 
                             // Optional upload to Pastebin (non-fatal if it fails)
                             maybeUploadToPastebin(sender, matchCodes.get(0), finalOutFile);
                         } else {
                             outFile = exporter.exportMatchesCombinedToCsv(matchCodes);
+                            File combinedEvents = exporter.exportCombinedEventsToCsv(matchCodes);
                             File finalOutFile1 = outFile;
                             org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
                                 sender.sendMessage(ChatColor.GREEN + "Exported combined CSV for "
                                         + ChatColor.WHITE + matchCodes.size()
                                         + ChatColor.GREEN + " matches.");
-                                sender.sendMessage(ChatColor.GRAY + "Saved to: " + finalOutFile1.getAbsolutePath());
+                                sender.sendMessage(ChatColor.GRAY + "Stats:  " + finalOutFile1.getAbsolutePath());
+                                if (combinedEvents != null) {
+                                    sender.sendMessage(ChatColor.GRAY + "Events: " + combinedEvents.getAbsolutePath());
+                                }
                             });
 
                             // Optional upload to Pastebin (non-fatal if it fails)

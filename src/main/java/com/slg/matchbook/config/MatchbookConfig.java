@@ -82,17 +82,13 @@ public final class MatchbookConfig {
             columns = cleaned;
         }
 
-        boolean followLeader = raw().getBoolean("party.follow_leader_to_arena", false);
-        long followDelay = clampLong(raw().getLong("party.follow_delay_ticks", 5L), 0L, 100L);
-
         return new RuntimeSettings(
                 trackedKeys(),
                 runningWaitTicksMax,
                 startSnapshotDelayTicks,
                 endSnapshotDelayTicks,
                 snapshotTimeoutTicks,
-                new RuntimeSettings.ExportSettings(columns == null || columns.isEmpty() ? null : List.copyOf(columns)),
-                new RuntimeSettings.PartySettings(followLeader, followDelay)
+                new RuntimeSettings.ExportSettings(columns == null || columns.isEmpty() ? null : List.copyOf(columns))
         );
     }
 

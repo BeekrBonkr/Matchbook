@@ -4,6 +4,7 @@ import com.slg.matchbook.MatchSession;
 import com.slg.matchbook.MatchbookPlugin;
 import com.slg.matchbook.StatSnapshot;
 import com.slg.matchbook.model.MatchDocument;
+import com.slg.matchbook.model.MatchEvent;
 import com.slg.matchbook.util.MatchIdUtil;
 import de.marcely.bedwars.api.BedwarsAPI;
 import de.marcely.bedwars.api.arena.Arena;
@@ -133,6 +134,8 @@ public final class MatchLifecycleService {
         // Overwrite start time at the true round start.
         session.startUnix = System.currentTimeMillis() / 1000L;
 
+        session.addEvent(MatchEvent.matchStart(session.startUnix));
+
         // Participants at start
         for (Player p : arena.getPlayers()) {
             session.unmarkSpectatorOnly(p.getUniqueId());
@@ -174,7 +177,9 @@ public final class MatchLifecycleService {
             session.unmarkPending(uuid);
             session.markSpectatorOnly(uuid);
             session.setUsername(uuid, player.getName());
-            // Still cache match id so scoreboards/overlays can show it while spectating.
+            if (session.tryLogJoin(uuid)) {
+                session.addEvent(MatchEvent.spectatorJoin(now(), player.getUniqueId().toString(), player.getName()));
+            }
             cacheMatchId(uuid, arena.getName(), session.matchId);
             return;
         }
@@ -185,6 +190,9 @@ public final class MatchLifecycleService {
             session.unmarkSpectatorOnly(uuid);
             session.markPending(uuid);
             session.setUsername(uuid, player.getName());
+            if (session.tryLogJoin(uuid)) {
+                session.addEvent(MatchEvent.playerJoin(now(), player.getUniqueId().toString(), player.getName(), null));
+            }
             cacheMatchId(uuid, arena.getName(), session.matchId);
             return;
         }
@@ -192,6 +200,10 @@ public final class MatchLifecycleService {
         // Real participant (team assigned, or already known participant)
         session.promoteToParticipant(uuid, team);
         session.setUsername(uuid, player.getName());
+        if (session.tryLogJoin(uuid)) {
+            String teamName = team != null ? team.name() : null;
+            session.addEvent(MatchEvent.playerJoin(now(), player.getUniqueId().toString(), player.getName(), teamName));
+        }
 
         // Placement tracking: mark participation + alive status for this player.
         if (team != null) {
@@ -241,12 +253,15 @@ public final class MatchLifecycleService {
             session.markSpectatorOnly(uuid);
             session.unmarkPending(uuid);
             session.setUsername(uuid, player.getName());
+            session.addEvent(MatchEvent.spectatorLeave(now(), player.getUniqueId().toString(), player.getName()));
             return;
         }
 
         // Otherwise, ensure they are treated as a real participant.
         session.promoteToParticipant(uuid, team);
         session.setUsername(uuid, player.getName());
+        String leavingTeam = team != null ? team.name() : (session.getTeam(uuid) != null ? session.getTeam(uuid).name() : null);
+        session.addEvent(MatchEvent.playerLeave(now(), player.getUniqueId().toString(), player.getName(), leavingTeam));
 
         // If they quit mid-match, treat as no longer alive for placement purposes.
         // (This matches esports expectations: leaving = eliminated / not alive.)
@@ -557,7 +572,7 @@ public final class MatchLifecycleService {
     // ----------------------------------------------------------------------
 
     public void onIngameDeath(Arena arena, Player victim, boolean fatalDeath, boolean countingDeathStats) {
-        if (arena == null || victim == null || !countingDeathStats) return;
+        if (arena == null || victim == null) return;
         MatchSession session = sessionsByArena.get(arena.getName());
         if (session == null) return;
 
@@ -568,7 +583,20 @@ public final class MatchLifecycleService {
         Team team = resolveTeamFromArena(arena, uuid);
         session.setTeam(uuid, team);
 
+        if (!countingDeathStats) {
+            // Still log the event but skip stat increment.
+            session.addEvent(MatchEvent.playerDeath(now(), uuid.toString(), victim.getName(),
+                    team != null ? team.name() : null, fatalDeath));
+            if (fatalDeath && team != null) {
+                session.markPlayerFinalDead(team, uuid);
+                maybeMarkTeamEliminated(arena, session, team);
+            }
+            return;
+        }
+
         session.addTriggerIncrement(uuid, "bedwars:deaths", 1L);
+        session.addEvent(MatchEvent.playerDeath(now(), uuid.toString(), victim.getName(),
+                team != null ? team.name() : null, fatalDeath));
         if (fatalDeath) {
             session.addTriggerIncrement(uuid, "bedwars:final_deaths", 1L);
 
@@ -580,7 +608,7 @@ public final class MatchLifecycleService {
         }
     }
 
-    public void onKill(Arena arena, Player killer, boolean fatalDeath, boolean countingKillStats) {
+    public void onKill(Arena arena, Player killer, Player victim, boolean fatalDeath, boolean countingKillStats) {
         if (arena == null || killer == null || !countingKillStats) return;
         MatchSession session = sessionsByArena.get(arena.getName());
         if (session == null) return;
@@ -589,9 +617,13 @@ public final class MatchLifecycleService {
         session.unmarkSpectatorOnly(uuid);
         session.addParticipant(uuid);
         session.setUsername(uuid, killer.getName());
-        session.setTeam(uuid, resolveTeamFromArena(arena, uuid));
+        Team killerTeam = resolveTeamFromArena(arena, uuid);
+        session.setTeam(uuid, killerTeam);
 
         session.addTriggerIncrement(uuid, "bedwars:kills", 1L);
+        String victimName = victim != null ? victim.getName() : null;
+        session.addEvent(MatchEvent.playerKill(now(), uuid.toString(), killer.getName(),
+                killerTeam != null ? killerTeam.name() : null, victimName, fatalDeath));
         if (fatalDeath) {
             session.addTriggerIncrement(uuid, "bedwars:final_kills", 1L);
         }
@@ -616,6 +648,7 @@ public final class MatchLifecycleService {
             session.markPlayerFinalDead(eliminatedTeam, uuid);
         }
 
+        session.addEvent(MatchEvent.teamEliminate(now(), eliminatedTeam.name()));
         maybeMarkTeamEliminated(arena, session, eliminatedTeam);
     }
 
@@ -636,6 +669,9 @@ public final class MatchLifecycleService {
         session.markSpectatorOnly(uuid);
         session.unmarkPending(uuid);
         session.setUsername(uuid, player.getName());
+        if (session.tryLogJoin(uuid)) {
+            session.addEvent(MatchEvent.spectatorJoin(now(), uuid.toString(), player.getName()));
+        }
         cacheMatchId(uuid, arena.getName(), session.matchId);
     }
 
@@ -669,6 +705,9 @@ public final class MatchLifecycleService {
         session.setTeam(uuid, breakerTeam);
 
         session.addTriggerIncrement(uuid, "bedwars:beds_destroyed", 1L);
+        session.addEvent(MatchEvent.bedBreak(now(), uuid.toString(), breaker.getName(),
+                breakerTeam != null ? breakerTeam.name() : null,
+                bedTeam != null ? bedTeam.name() : null));
 
         // Placement tracking: record which team lost their bed (NOT the breaking player's team).
         if (bedTeam != null) {
@@ -708,6 +747,8 @@ public final class MatchLifecycleService {
     // -----------------
 
     private void finishMatch(Arena arena, MatchSession session, String result) {
+        session.addEvent(MatchEvent.matchEnd(now()));
+
         // Cache matchId for participants so placeholders remain stable during post-game transitions.
         for (UUID u : session.getParticipants()) {
             cacheMatchId(u, arena != null ? arena.getName() : session.arenaName, session.matchId);
@@ -1119,6 +1160,10 @@ public final class MatchLifecycleService {
         if (session.result != null && !session.result.isBlank()) return session.result;
         if (session.winningTeam != null) return "WIN:" + session.winningTeam.name();
         return "UNKNOWN";
+    }
+
+    private static long now() {
+        return System.currentTimeMillis() / 1000L;
     }
 
     private static final class UuidSnapshot {

@@ -1,6 +1,7 @@
 package com.slg.matchbook.io;
 
 import com.slg.matchbook.MatchbookPlugin;
+import com.slg.matchbook.io.MatchYamlCodec;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.*;
@@ -294,6 +295,108 @@ public final class MatchExporter {
             }
         }
         return out;
+    }
+
+    // -----------------------------------------------------------------------
+    // Event log export
+    // -----------------------------------------------------------------------
+
+    /** Exports events for a single match to exports/<matchCode>_events.csv. Returns null if no events. */
+    public File exportMatchEventsToCsv(String matchCode) throws IOException {
+        YamlConfiguration yml = plugin.getRepo().loadMatchYaml(matchCode);
+        if (yml == null) return null;
+
+        List<Map<String, Object>> events = MatchYamlCodec.readRawEvents(yml);
+        if (events.isEmpty()) return null;
+
+        File exportsDir = new File(plugin.getAddonDataFolder(), "exports");
+        if (!exportsDir.exists() && !exportsDir.mkdirs()) {
+            throw new IOException("Could not create exports directory");
+        }
+
+        File outFile = new File(exportsDir, sanitizeFileName(matchCode) + "_events.csv");
+
+        try (Writer w = new OutputStreamWriter(new FileOutputStream(outFile), StandardCharsets.UTF_8);
+             PrintWriter out = new PrintWriter(w)) {
+
+            out.println("# match: " + matchCode);
+            out.println("offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,"
+                    + "killer_name,killer_uuid,killer_team,bed_team,final");
+
+            for (Map<String, Object> ev : events) {
+                out.println(String.join(",", eventRow(ev)));
+            }
+        }
+
+        return outFile;
+    }
+
+    /** Exports events for multiple matches into a single chronologically sorted events CSV. */
+    public File exportCombinedEventsToCsv(List<String> matchCodes) throws IOException {
+        if (matchCodes == null || matchCodes.isEmpty()) return null;
+
+        List<Map<String, Object>> allEvents = new ArrayList<>();
+        for (String code : matchCodes) {
+            YamlConfiguration yml = plugin.getRepo().loadMatchYaml(code);
+            if (yml == null) continue;
+            List<Map<String, Object>> evs = MatchYamlCodec.readRawEvents(yml);
+            // Tag each event with its match code for the combined output
+            for (Map<String, Object> ev : evs) {
+                Map<String, Object> tagged = new LinkedHashMap<>(ev);
+                tagged.put("_match", code);
+                allEvents.add(tagged);
+            }
+        }
+
+        if (allEvents.isEmpty()) return null;
+
+        // Sort chronologically by timestamp
+        allEvents.sort(Comparator.comparingLong(m -> {
+            Object v = m.get("timestamp");
+            return v instanceof Number n ? n.longValue() : 0L;
+        }));
+
+        File exportsDir = new File(plugin.getAddonDataFolder(), "exports");
+        if (!exportsDir.exists() && !exportsDir.mkdirs()) {
+            throw new IOException("Could not create exports directory");
+        }
+
+        String name = sanitizeFileName(String.join("_", matchCodes));
+        if (name.length() > 160) name = name.substring(0, 160);
+        File outFile = new File(exportsDir, name + "_events.csv");
+
+        try (Writer w = new OutputStreamWriter(new FileOutputStream(outFile), StandardCharsets.UTF_8);
+             PrintWriter out = new PrintWriter(w)) {
+
+            out.println("# match_codes: " + String.join(", ", matchCodes));
+            out.println("match,offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,"
+                    + "killer_name,killer_uuid,killer_team,bed_team,final");
+
+            for (Map<String, Object> ev : allEvents) {
+                List<String> row = new ArrayList<>();
+                row.add(csv(String.valueOf(ev.getOrDefault("_match", ""))));
+                row.addAll(eventRow(ev));
+                out.println(String.join(",", row));
+            }
+        }
+
+        return outFile;
+    }
+
+    private static List<String> eventRow(Map<String, Object> ev) {
+        return List.of(
+                String.valueOf(ev.getOrDefault("offset", 0)),
+                String.valueOf(ev.getOrDefault("timestamp", 0)),
+                csv(String.valueOf(ev.getOrDefault("type", ""))),
+                csv(String.valueOf(ev.getOrDefault("player_name", ""))),
+                csv(String.valueOf(ev.getOrDefault("player_uuid", ""))),
+                csv(String.valueOf(ev.getOrDefault("player_team", ""))),
+                csv(String.valueOf(ev.getOrDefault("killer_name", ""))),
+                csv(String.valueOf(ev.getOrDefault("killer_uuid", ""))),
+                csv(String.valueOf(ev.getOrDefault("killer_team", ""))),
+                csv(String.valueOf(ev.getOrDefault("bed_team", ""))),
+                String.valueOf(ev.getOrDefault("final", false))
+        );
     }
 
     private static final class AggRow {

@@ -5,6 +5,7 @@ import com.slg.matchbook.StatSnapshot;
 import de.marcely.bedwars.api.arena.Team;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * A storage/GUI/export-friendly representation of a finished match.
@@ -22,7 +23,8 @@ public record MatchDocument(
         List<UUID> spectators,
         Map<UUID, String> spectatorUsernames,
         Map<UUID, PlayerEntry> players,
-        List<String> warnings
+        List<String> warnings,
+        List<MatchEvent> events
 ) {
 
     public record PlayerEntry(
@@ -129,6 +131,8 @@ public record MatchDocument(
             players.put(u, new PlayerEntry(u, username, team, startTaken, start, end, diff));
         }
 
+        List<MatchEvent> events = session.getEvents();
+
         return new MatchDocument(
                 session.matchId,
                 session.arenaName,
@@ -140,7 +144,8 @@ public record MatchDocument(
                 List.copyOf(spectators),
                 Collections.unmodifiableMap(spectatorUsernames),
                 Collections.unmodifiableMap(players),
-                warnings.isEmpty() ? null : List.copyOf(warnings)
+                warnings.isEmpty() ? null : List.copyOf(warnings),
+                events.isEmpty() ? null : List.copyOf(events)
         );
     }
 }

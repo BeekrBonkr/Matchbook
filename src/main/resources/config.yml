@@ -1,6 +1,6 @@
 # ============================================================
 #  Matchbook Configuration
-#  Plugin version: 0.5.0  |  Config version: 0.0.8
+#  Plugin version: 0.5.1  |  Config version: 0.0.9
 #
 #  When you update the plugin, Matchbook will automatically:
 #    1. Back up your current config  (config.yml.bak-<version>-<date>)
@@ -11,7 +11,7 @@
 # ============================================================
 
 # Internal config schema version — do not change this.
-config-version: "0.0.8"
+config-version: "0.0.9"
 
 # ============================================================
 #  Storage
@@ -117,33 +117,18 @@ export:
   columns: []
 
 # ============================================================
-#  Export upload (Pastebin)
+#  Export upload (Hastebin)
 # ============================================================
 export_upload:
-  # Set to true to automatically upload CSV exports to Pastebin.
+  # Set to true to automatically upload CSV exports to a Hastebin-compatible server
+  # after every /mb export. The file is always saved locally regardless of this setting.
   enabled: false
 
-  # Safety guard: /mb test --pastebin will only create a real paste when this is true.
-  # Prevents accidental Pastebin spam on production servers during testing.
-  allow_test_paste: false
-
-  # Prefix added to each paste title. Final title: "<prefix> - <matchcode>"
-  paste_name_prefix: "Matchbook Export"
-
-  # Paste visibility: true = unlisted (recommended), false = public
-  unlisted: true
-
-  # Paste expiry.  Valid values: N (never), 10M, 1H, 1D, 1W, 2W, 1M, 6M, 1Y
-  expire: "1W"
-
-  pastebin:
-    # Your Pastebin developer API key (required).
-    # Get one at: https://pastebin.com/api
-    api_dev_key: ""
-
-    # Optional: create pastes under a specific Pastebin account.
-    # Requires generating an api_user_key via the Pastebin API.
-    api_user_key: ""
+  # URL of the Hastebin-compatible server to upload to (no trailing slash).
+  # Default is the official Hastebin. Any compatible self-hosted or alternative
+  # instance works here (e.g. https://hst.sh).
+  # Note: pastes are public and have no built-in expiry guarantee.
+  server: "https://hastebin.com"
 
 # ============================================================
 #  Placeholder reliability  (PlaceholderAPI)

@@ -12,7 +12,7 @@ A Paper plugin that records persistent match history for [MBedwars](https://www.
 - **Tie detection** — matches that end without a winner are correctly flagged as ties.
 - **In-game GUI** — paginated match list, detailed per-player stats, event timeline viewer.
 - **CSV export** — player stats and event log exported as separate CSV files.
-- **Pastebin upload** — optionally upload exported CSVs to Pastebin automatically.
+- **Hastebin upload** — optionally upload exported CSVs to any Hastebin-compatible server automatically. Files are always saved locally too.
 - **PlaceholderAPI** — exposes `%matchbook_matchcode%` for scoreboards/holograms.
 - **Dual storage** — flat YAML files (default) or MySQL/MariaDB with one-command migration.
 - **Auto config updates** — on plugin upgrade, new config keys are added automatically while preserving your existing settings.
@@ -55,7 +55,7 @@ All commands use `/matchbook` or the alias `/mb`.
 | `/mb migrate ... --dry-run` | `mb.command.migrate` | Preview migration without writing anything. |
 | `/mb reload` | `mb.command.reload` | Reload `config.yml` without restarting. |
 | `/mb statskeys [player]` | `mb.command.statskeys` | List all stat keys available from MBedwars for a player. |
-| `/mb test [--pastebin]` | `mb.command.test` | Run a storage health check; optionally test Pastebin. |
+| `/mb test [--upload]` | `mb.command.test` | Run a storage health check; optionally test Hastebin upload. |
 
 ---
 
@@ -210,15 +210,12 @@ export:
     # Leave empty to use all tracked_keys as defaults
 ```
 
-### Pastebin Upload
+### Hastebin Upload
 
 ```yaml
 export_upload:
   enabled: true
-  unlisted: true
-  expire: "1W"
-  pastebin:
-    api_dev_key: "your_key_here"
+  server: "https://hastebin.com"   # or any compatible instance, e.g. https://hst.sh
 ```
 
 ---

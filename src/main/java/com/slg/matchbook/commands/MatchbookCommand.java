@@ -4,7 +4,7 @@ import com.slg.matchbook.MatchbookPlugin;
 import com.slg.matchbook.gui.MatchesDetailsGui;
 import com.slg.matchbook.gui.MatchesGui;
 import com.slg.matchbook.io.MatchExporter;
-import com.slg.matchbook.io.PastebinUploader;
+import com.slg.matchbook.io.HasteUploader;
 import org.bukkit.ChatColor;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
@@ -190,8 +190,8 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                                 }
                             });
 
-                            // Optional upload to Pastebin (non-fatal if it fails)
-                            maybeUploadToPastebin(sender, matchCodes.get(0), finalOutFile);
+                            // Optional upload to Hastebin (non-fatal if it fails)
+                            maybeUploadToHastebin(sender, finalOutFile);
                         } else {
                             outFile = exporter.exportMatchesCombinedToCsv(matchCodes);
                             File combinedEvents = exporter.exportCombinedEventsToCsv(matchCodes);
@@ -206,8 +206,8 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                                 }
                             });
 
-                            // Optional upload to Pastebin (non-fatal if it fails)
-                            maybeUploadToPastebin(sender, "combined-" + matchCodes.size(), finalOutFile1);
+                            // Optional upload to Hastebin (non-fatal if it fails)
+                            maybeUploadToHastebin(sender, finalOutFile1);
                         }
                     } catch (Exception e) {
                         org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
@@ -280,33 +280,33 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                     return true;
                 }
 
-                boolean testPastebin = false;
+                boolean testUpload = false;
                 for (String a : args) {
-                    if (a.equalsIgnoreCase("--pastebin") || a.equalsIgnoreCase("--paste") || a.equalsIgnoreCase("-p")) {
-                        testPastebin = true;
+                    if (a.equalsIgnoreCase("--upload") || a.equalsIgnoreCase("--hastebin") || a.equalsIgnoreCase("-u")) {
+                        testUpload = true;
                         break;
                     }
                 }
 
                 sender.sendMessage(ChatColor.GRAY + "Running connection tests... (this runs async)");
 
-                boolean finalTestPastebin = testPastebin;
+                boolean finalTestUpload = testUpload;
                 org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                     var repoResult = plugin.getRepo().healthCheck();
-                    var pasteResult = finalTestPastebin ? testPastebinConnection() : null;
+                    var uploadResult = finalTestUpload ? testHastebinConnection() : null;
 
                     org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
                         sender.sendMessage(ChatColor.YELLOW + "Matchbook health checks:");
                         sender.sendMessage(colorizeResult("Storage", repoResult.ok(), repoResult.message()));
 
-                        if (finalTestPastebin) {
-                            if (pasteResult == null) {
-                                sender.sendMessage(colorizeResult("Pastebin", false, "Pastebin test failed: unknown error"));
+                        if (finalTestUpload) {
+                            if (uploadResult == null) {
+                                sender.sendMessage(colorizeResult("Hastebin", false, "Upload test failed: unknown error"));
                             } else {
-                                sender.sendMessage(colorizeResult("Pastebin", pasteResult.ok, pasteResult.message));
+                                sender.sendMessage(colorizeResult("Hastebin", uploadResult.ok, uploadResult.message));
                             }
                         } else {
-                            sender.sendMessage(ChatColor.DARK_GRAY + "Pastebin: (skipped) use --pastebin to test");
+                            sender.sendMessage(ChatColor.DARK_GRAY + "Hastebin: (skipped) use --upload to test");
                         }
                     });
                 });
@@ -397,7 +397,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
             }
 
             if (sub.equals("test")) {
-                return filterPrefix(List.of("--pastebin"), partial);
+                return filterPrefix(List.of("--upload"), partial);
             }
 
             if (sub.equals("statskeys")) {
@@ -467,7 +467,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
         }
 
         if (canAdmin(sender, PERM_TEST) || sender.hasPermission("matchbook.admin")) {
-            sender.sendMessage(ChatColor.GRAY + " - /" + label + " test [--pastebin]" + ChatColor.DARK_GRAY + "  (test storage/pastebin)");
+            sender.sendMessage(ChatColor.GRAY + " - /" + label + " test [--upload]" + ChatColor.DARK_GRAY + "  (test storage / hastebin upload)");
             any = true;
         }
 
@@ -488,26 +488,18 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
 
     private record SimpleResult(boolean ok, String message) {}
 
-    private SimpleResult testPastebinConnection() {
+    private SimpleResult testHastebinConnection() {
         try {
             var yml = plugin.getMatchbookConfig().raw();
             boolean enabled = yml.getBoolean("export_upload.enabled", false);
             if (!enabled) {
-                return new SimpleResult(false, "export_upload.enabled is false");
+                return new SimpleResult(false, "export_upload.enabled is false — enable it in config.yml first");
             }
 
-            boolean allowTest = yml.getBoolean("export_upload.allow_test_paste", false);
-            if (!allowTest) {
-                return new SimpleResult(false, "export_upload.allow_test_paste is false (refusing to create a real paste)");
-            }
-
-            String devKey = yml.getString("export_upload.pastebin.api_dev_key", "");
-            String userKey = yml.getString("export_upload.pastebin.api_user_key", "");
-            PastebinUploader uploader = new PastebinUploader(devKey, userKey);
-
-            String content = "matchbook_connection_test,ok\n" + System.currentTimeMillis();
-            String url = uploader.upload(content, "Matchbook Connection Test", true, "10M");
-            return new SimpleResult(true, "Created test paste: " + url);
+            String server = yml.getString("export_upload.server", "https://hastebin.com");
+            HasteUploader uploader = new HasteUploader(server);
+            String url = uploader.upload("matchbook_connection_test");
+            return new SimpleResult(true, "Upload OK: " + url);
         } catch (Exception e) {
             return new SimpleResult(false, e.getMessage());
         }
@@ -531,30 +523,20 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
         return out;
     }
 
-    private void maybeUploadToPastebin(CommandSender sender, String labelForTitle, File csvFile) {
+    private void maybeUploadToHastebin(CommandSender sender, File csvFile) {
         try {
             var cfg = plugin.getMatchbookConfig().raw();
             if (!cfg.getBoolean("export_upload.enabled", false)) return;
 
-            String devKey = cfg.getString("export_upload.pastebin.api_dev_key", "");
-            if (devKey == null || devKey.isBlank()) return;
+            String server = cfg.getString("export_upload.server", "https://hastebin.com");
+            String content = Files.readString(csvFile.toPath(), StandardCharsets.UTF_8);
 
-            String userKey = cfg.getString("export_upload.pastebin.api_user_key", "");
-            boolean unlisted = cfg.getBoolean("export_upload.unlisted", true);
-            String expire = cfg.getString("export_upload.expire", "1W");
-            String prefix = cfg.getString("export_upload.paste_name_prefix", "Matchbook Export");
+            HasteUploader uploader = new HasteUploader(server);
+            String url = uploader.upload(content);
 
-            String title = (prefix == null ? "Matchbook Export" : prefix) + " - " + labelForTitle;
-            String csv = Files.readString(csvFile.toPath(), StandardCharsets.UTF_8);
-
-            PastebinUploader uploader = new PastebinUploader(devKey, userKey);
-            String url = uploader.upload(csv, title, unlisted, expire);
-
-            org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                sender.sendMessage(ChatColor.GREEN + "Pastebin: " + ChatColor.WHITE + url);
-            });
+            org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
+                    sender.sendMessage(ChatColor.GREEN + "Uploaded: " + ChatColor.WHITE + url));
         } catch (Exception e) {
-            // Don't fail export if upload fails; just log in debug.
             if (plugin.getMatchbookConfig().debugLogging()) {
                 plugin.getLogger().warning("Export upload failed: " + e.getMessage());
             }

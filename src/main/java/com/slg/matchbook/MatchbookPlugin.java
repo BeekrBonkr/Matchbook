@@ -89,9 +89,15 @@ public final class MatchbookPlugin extends JavaPlugin {
         this.storage = new MatchStorage(this);
 
         BedwarsAPI.onReady(() -> {
-            this.lifecycle = new MatchLifecycleService(this);
-            this.listener = new MatchbookListener(this, lifecycle);
-            Bukkit.getPluginManager().registerEvents(listener, this);
+            boolean hubMode = config.hubMode();
+            if (hubMode) {
+                getLogger().info("Matchbook: Hub/lobby mode enabled — match recording is disabled. "
+                        + "This server will only read/export from storage.");
+            } else {
+                this.lifecycle = new MatchLifecycleService(this);
+                this.listener = new MatchbookListener(this, lifecycle);
+                Bukkit.getPluginManager().registerEvents(listener, this);
+            }
 
             // GUI
             this.detailsGui  = new MatchesDetailsGui(this);

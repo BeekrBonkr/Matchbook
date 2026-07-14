@@ -17,6 +17,7 @@ A Paper plugin that records persistent match history for [MBedwars](https://www.
 - **Dual storage** — flat YAML files (default) or MySQL/MariaDB with one-command migration.
 - **Auto config updates** — on plugin upgrade, new config keys are added automatically while preserving your existing settings.
 - **Proxy/network safe** — on a hub server with no arenas of its own, Matchbook won't create match records for arenas MBedwars merely knows about over the network (via its remote-arena awareness); it only tracks arenas actually running on that server.
+- **Hub/lobby mode** — an explicit `mode.hub` config flag to fully disable match recording on a server, while still reading and exporting matches from the shared storage backend.
 
 ---
 
@@ -178,6 +179,15 @@ Config lives at `plugins/MBedwars/add-ons/Matchbook/config.yml`.
 
 On plugin update, Matchbook automatically backs up your config (`config.yml.bak-<old-version>-<date>`) and merges new settings in. You never need to re-configure from scratch.
 
+### Hub / Lobby Mode
+
+```yaml
+mode:
+  hub: false   # set true on a server that should never record matches
+```
+
+When `mode.hub` is `true`, Matchbook registers no match-tracking listeners at all — it never creates a match session or writes a match to storage on that server. It still connects to the configured storage backend, so `/mb matches`, `/mb all`, `/mb view`, and `/mb export` keep working for browsing/exporting matches recorded elsewhere. This is meant for a hub/lobby server pointed at the same shared MySQL database as your backend arena servers (`storage.type: mysql`). Takes effect on server start/restart, not `/mb reload`.
+
 ### Storage
 
 ```yaml
@@ -265,7 +275,9 @@ If PlaceholderAPI is installed, Matchbook registers the `%matchbook_matchcode%` 
 
 MBedwars has its own network-wide arena awareness (so hub servers behind a proxy can show live info for arenas hosted on other backend servers). Matchbook only ever creates a match record for an arena that has an actual game world loaded on that specific server — so installing Matchbook on a hub server with no arenas of its own is safe: it will never start tracking (and getting stuck on) matches that are really being played elsewhere on the network. If it ever rejects an arena for this reason, it logs one warning per arena name so you can confirm what happened.
 
-If you run YAML storage per-server, each server's match history stays local to it. Point every server at the same MySQL database (`storage.type: mysql`) if you want one shared, network-wide match history instead.
+For a hub server, prefer setting `mode.hub: true` explicitly (see [Hub / Lobby Mode](#hub--lobby-mode)) rather than relying solely on the automatic arena-locality check above — it skips match tracking entirely instead of rejecting arenas one at a time, and makes the server's role unambiguous.
+
+If you run YAML storage per-server, each server's match history stays local to it. Point every server at the same MySQL database (`storage.type: mysql`) if you want one shared, network-wide match history instead — this is required for a hub server in `mode.hub: true` to have anything to read/export.
 
 ---
 

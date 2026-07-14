@@ -1,6 +1,6 @@
 # ============================================================
 #  Matchbook Configuration
-#  Plugin version: 0.6.2  |  Config version: 0.0.9
+#  Plugin version: 0.6.3  |  Config version: 0.0.10
 #
 #  When you update the plugin, Matchbook will automatically:
 #    1. Back up your current config  (config.yml.bak-<version>-<date>)
@@ -11,7 +11,21 @@
 # ============================================================
 
 # Internal config schema version — do not change this.
-config-version: "0.0.9"
+config-version: "0.0.10"
+
+# ============================================================
+#  Mode
+# ============================================================
+mode:
+  # Set to true on a hub/lobby server that never actually hosts matches.
+  # In hub mode, Matchbook completely skips match tracking: it registers no match
+  # event listeners, creates no match sessions, and never writes to storage. It still
+  # connects to your configured storage backend so /mb matches, /mb view, and
+  # /mb export keep working for browsing and exporting matches recorded elsewhere
+  # (typically a shared MySQL database also used by your backend arena servers).
+  #
+  # Takes effect on server start/restart — not on /mb reload.
+  hub: false
 
 # ============================================================
 #  Storage

@@ -2,6 +2,15 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.6.3] — 2026-07-14
+
+**Hub/lobby mode:**
+- New `mode.hub` config option. When enabled, Matchbook registers no match-tracking listeners at all — it never creates a match session or writes a match to storage on that server. `/mb matches`, `/mb all`, `/mb view`, and `/mb export` keep working against the configured storage backend, so a hub server can browse/export a shared MySQL match history without ever attempting to record matches itself.
+- Takes effect on server start/restart, same as `storage.type`; not hot-reloadable via `/mb reload`.
+- Config version bumped to 0.0.10.
+
+**Docs:** README updated with a "Hub / Lobby Mode" section and cross-referenced from "Multi-Server / Proxy Networks".
+
 ## [0.6.2] — 2026-07-14
 
 **Placement accuracy fixes:**

@@ -21,6 +21,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 
 /**
  * Bridges MBedwars events to the lifecycle service.
@@ -66,6 +68,11 @@ public final class MatchbookListener implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onTeamEliminate(TeamEliminateEvent e) {
+        if (e.isAsynchronous()) {
+            Bukkit.getScheduler().runTask(plugin, () ->
+                    lifecycle.onTeamEliminate(e.getArena(), e.getTeam()));
+            return;
+        }
         lifecycle.onTeamEliminate(e.getArena(), e.getTeam());
     }
 
@@ -84,12 +91,12 @@ public final class MatchbookListener implements Listener {
     /**
      * Promotes pending players the moment MBedwars assigns them a team.
      * Fixes the race window where lobby-phase players had no team yet.
+     * Also passes the old team (if any) so a mid-match switch/removal cleans up stale
+     * alive-tracking on the team the player left, instead of leaving a ghost entry behind.
      */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerTeamChange(PlayerTeamChangeEvent e) {
-        Team newTeam = e.getNewTeam();
-        if (newTeam == null) return; // team removed, not assigned
-        lifecycle.onPlayerTeamAssigned(e.getArena(), e.getPlayer(), newTeam);
+        lifecycle.onPlayerTeamAssigned(e.getArena(), e.getPlayer(), e.getOldTeam(), e.getNewTeam());
     }
 
     /**
@@ -97,12 +104,13 @@ public final class MatchbookListener implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onIngameDeath(PlayerIngameDeathEvent e) {
+        EntityDamageEvent.DamageCause cause = resolveDeathCause(e);
         if (e.isAsynchronous()) {
             Bukkit.getScheduler().runTask(plugin, () ->
-                    lifecycle.onIngameDeath(e.getArena(), e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats()));
+                    lifecycle.onIngameDeath(e.getArena(), e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause));
             return;
         }
-        lifecycle.onIngameDeath(e.getArena(), e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats());
+        lifecycle.onIngameDeath(e.getArena(), e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause);
     }
 
     /**
@@ -111,16 +119,41 @@ public final class MatchbookListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKill(PlayerKillPlayerEvent e) {
         Player victim = tryGetVictim(e);
+        EntityDamageEvent.DamageCause cause = resolveKillCause(e);
         if (e.isAsynchronous()) {
             Bukkit.getScheduler().runTask(plugin, () ->
-                    lifecycle.onKill(e.getArena(), e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats()));
+                    lifecycle.onKill(e.getArena(), e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), cause));
             return;
         }
-        lifecycle.onKill(e.getArena(), e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats());
+        lifecycle.onKill(e.getArena(), e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), cause);
     }
 
     private static Player tryGetVictim(PlayerKillPlayerEvent e) {
         try { return e.getPlayer(); } catch (Throwable ignored) { return null; }
+    }
+
+    /**
+     * MBedwars doesn't expose a bespoke death-cause field; it's one hop away via the wrapped
+     * Bukkit PlayerDeathEvent's last damage cause. Read defensively since that's Bukkit-level
+     * state rather than an argument bound to this event.
+     */
+    private static EntityDamageEvent.DamageCause resolveDeathCause(PlayerIngameDeathEvent e) {
+        try {
+            PlayerDeathEvent bukkitEvent = e.getBukkitEvent();
+            if (bukkitEvent == null || bukkitEvent.getEntity() == null) return null;
+            EntityDamageEvent last = bukkitEvent.getEntity().getLastDamageCause();
+            return last != null ? last.getCause() : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static EntityDamageEvent.DamageCause resolveKillCause(PlayerKillPlayerEvent e) {
+        try {
+            return e.getCause();
+        } catch (Throwable ignored) {
+            return resolveDeathCause(e);
+        }
     }
 
     /**

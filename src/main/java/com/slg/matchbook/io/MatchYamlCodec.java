@@ -105,6 +105,8 @@ public final class MatchYamlCodec {
                 if (ev.killerTeam() != null)  m.put("killer_team", ev.killerTeam());
                 if (ev.bedTeam() != null)     m.put("bed_team", ev.bedTeam());
                 if (ev.isFinal())             m.put("final", true);
+                if (ev.deathCause() != null)  m.put("cause", ev.deathCause());
+                if (ev.wasSpectating())       m.put("was_spectating", true);
                 eventList.add(m);
             }
             yml.set("events", eventList);

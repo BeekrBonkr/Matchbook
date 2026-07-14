@@ -16,6 +16,7 @@ import de.marcely.bedwars.api.player.PlayerDataAPI;
 import de.marcely.bedwars.api.player.PlayerStats;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import java.lang.reflect.Method;
@@ -69,6 +70,9 @@ public final class MatchLifecycleService {
 
     private record CachedMatchId(String matchId, String arenaName, long expiresAtMillis) {}
 
+    /** Arena names we've already logged a "not locally hosted" warning for, to avoid log spam. */
+    private final Set<String> warnedNonLocalArenas = ConcurrentHashMap.newKeySet();
+
     public MatchLifecycleService(MatchbookPlugin plugin) {
         this.plugin = plugin;
         // MBedwars API is accessed via static entrypoints (no singleton instance).
@@ -80,13 +84,37 @@ public final class MatchLifecycleService {
     }
 
     /**
+     * True if this arena is actually hosted (has a loaded game world) on this server instance.
+     *
+     * MBedwars supports network-wide arena awareness (RemoteArena/RemoteAPI) so that hub servers
+     * behind a proxy can see arenas hosted on other backend servers. A loaded game world can only
+     * exist on the server actually running the match, so this rejects any arena reference that
+     * isn't truly local. Without this, a hub server with zero arenas of its own could still create
+     * and persist bogus match sessions for arenas it merely knows about over the network, which
+     * then never receive a real RoundEnd and get stuck until the server restarts.
+     */
+    private boolean isLocallyHosted(Arena arena) {
+        if (arena == null) return false;
+        try {
+            if (arena.getGameWorld() != null) return true;
+        } catch (Throwable ignored) {
+        }
+        if (warnedNonLocalArenas.add(arena.getName())) {
+            plugin.getLogger().warning("Matchbook: ignoring arena '" + arena.getName()
+                    + "' — no game world loaded on this server. This usually means MBedwars is "
+                    + "reporting a remote/proxied arena that isn't actually hosted here.");
+        }
+        return false;
+    }
+
+    /**
      * Ensure a session exists for an arena.
      *
      * This is intentionally safe to call from PlaceholderAPI resolution: it does not start snapshots,
      * it simply guarantees a stable matchId for the arena instance.
      */
     public MatchSession getOrCreateSession(Arena arena, String reason) {
-        if (arena == null) return null;
+        if (arena == null || !isLocallyHosted(arena)) return null;
 
         MatchSession session = sessionsByArena.computeIfAbsent(arena.getName(), __ ->
                 new MatchSession(MatchIdUtil.newMatchId(), arena.getName(), System.currentTimeMillis() / 1000L));
@@ -119,7 +147,7 @@ public final class MatchLifecycleService {
     }
 
     public void onRoundStart(Arena arena) {
-        if (arena == null) return;
+        if (arena == null || !isLocallyHosted(arena)) return;
 
         // If a session already exists (created early on first join), reuse its matchId.
         MatchSession session = sessionsByArena.get(arena.getName());
@@ -151,6 +179,10 @@ public final class MatchLifecycleService {
             cacheMatchId(p.getUniqueId(), arena.getName(), session.matchId);
         }
 
+        // Every team's roster should be known by round start; freeze totalTeams() so that a very
+        // early elimination can't compute placement against a still-growing, undercounted team set.
+        session.freezeTotalTeams();
+
         // Take totals snapshot near start for auditing/debugging.
         takeStartSnapshots(arena, session);
 
@@ -159,7 +191,7 @@ public final class MatchLifecycleService {
     }
 
     public void onPlayerJoinArena(Arena arena, Player player) {
-        if (arena == null || player == null) return;
+        if (arena == null || player == null || !isLocallyHosted(arena)) return;
 
         // Create a session early so placeholders can resolve during pre-round phases.
         MatchSession session = sessionsByArena.computeIfAbsent(arena.getName(), __ ->
@@ -206,9 +238,15 @@ public final class MatchLifecycleService {
         }
 
         // Placement tracking: mark participation + alive status for this player.
+        // Don't resurrect a player who is currently an in-game spectator (e.g. reconnecting after
+        // an earlier fatal death) — MBedwars' own spectator classification is the authoritative
+        // signal that they are not actually back in the fight, and re-adding them to the alive set
+        // would let a genuinely eliminated team dodge/delay elimination detection indefinitely.
         if (team != null) {
             session.markTeamParticipating(team);
-            session.markPlayerAlive(team, uuid);
+            if (!spectator) {
+                session.markPlayerAlive(team, uuid);
+            }
         }
 
         // If the player previously quit this same arena (and we captured quit stats),
@@ -260,12 +298,25 @@ public final class MatchLifecycleService {
         // Otherwise, ensure they are treated as a real participant.
         session.promoteToParticipant(uuid, team);
         session.setUsername(uuid, player.getName());
-        String leavingTeam = team != null ? team.name() : (session.getTeam(uuid) != null ? session.getTeam(uuid).name() : null);
-        session.addEvent(MatchEvent.playerLeave(now(), player.getUniqueId().toString(), player.getName(), leavingTeam));
+        Team effectiveTeam = team != null ? team : session.getTeam(uuid);
+        String leavingTeam = effectiveTeam != null ? effectiveTeam.name() : null;
+
+        // Was this player already eliminated (in-game spectator on their now-dead team) before this
+        // quit, or were they still an active alive player? Must be read BEFORE markPlayerFinalDead
+        // below, which would otherwise make every leaving player look like they "were spectating".
+        boolean wasSpectating = effectiveTeam != null && !session.isPlayerAlive(effectiveTeam, uuid);
+        session.addEvent(MatchEvent.playerLeave(now(), player.getUniqueId().toString(), player.getName(),
+                leavingTeam, wasSpectating));
 
         // If they quit mid-match, treat as no longer alive for placement purposes.
         // (This matches esports expectations: leaving = eliminated / not alive.)
-        if (team != null) session.markPlayerFinalDead(team, uuid);
+        // If their bed is already gone, this may be the team's last alive player, so check for
+        // elimination live rather than leaving it to the round-end backstop sweep (which can only
+        // append it in arbitrary order relative to other backstop-caught teams).
+        if (effectiveTeam != null) {
+            session.markPlayerFinalDead(effectiveTeam, uuid);
+            maybeMarkTeamEliminated(arena, session, effectiveTeam);
+        }
 
         // Capture game stats snapshot from QuitPlayerMemory (best), fallback to live game stats.
         QuitPlayerMemory mem = null;
@@ -412,6 +463,11 @@ public final class MatchLifecycleService {
         }
 
         // Any team without placement (ties/aborts/API edge cases) gets a best-effort assignment.
+        // Track which ranks are already taken so multiple ambiguous teams don't collide on the
+        // same fallback number (they'd otherwise all get stamped e.g. "4th place").
+        Set<Integer> usedPlacements = new HashSet<>(session.placementByTeam.values());
+        int nextFallback = session.totalTeams();
+
         for (Team t : session.participatingTeams) {
             if (session.placementByTeam.containsKey(t)) continue;
 
@@ -424,22 +480,29 @@ public final class MatchLifecycleService {
                 // If no winner OR tie-by-alive-teams, treat as tied 1st.
                 int place = (tieByAliveTeams || session.winningTeam == null) ? 1 : 2;
                 session.setPlacementIfAbsent(t, place);
+                usedPlacements.add(place);
                 continue;
             }
 
             if (bedLost && fullyDead) {
                 // Should have been caught, but just in case.
                 maybeMarkTeamEliminated(arena, session, t);
+                Integer assigned = session.placementByTeam.get(t);
+                if (assigned != null) usedPlacements.add(assigned);
                 continue;
             }
 
             // Partial info:
             // - fullyDead but bedLost unknown
             // - bedLost but not fullyDead (shouldn't happen, but API glitches can)
-            // Put them in the "last" bucket so we never falsely reward them.
-            int fallback = Math.max(1, session.totalTeams());
-            if (session.winningTeam != null && fallback == 1) fallback = 2;
+            // Put them in the lowest still-available "last place" slot so we never falsely reward
+            // them, while still giving distinct ranks to multiple teams landing in this bucket.
+            while (nextFallback >= 1 && usedPlacements.contains(nextFallback)) nextFallback--;
+            int fallback = Math.max(1, nextFallback);
+            if (session.winningTeam != null && fallback == 1 && usedPlacements.contains(1)) fallback = 2;
             session.setPlacementIfAbsent(t, fallback);
+            usedPlacements.add(fallback);
+            nextFallback--;
         }
     }
 
@@ -575,7 +638,8 @@ public final class MatchLifecycleService {
     // Critical stat events (kills/deaths/beds)
     // ----------------------------------------------------------------------
 
-    public void onIngameDeath(Arena arena, Player victim, boolean fatalDeath, boolean countingDeathStats) {
+    public void onIngameDeath(Arena arena, Player victim, boolean fatalDeath, boolean countingDeathStats,
+                              EntityDamageEvent.DamageCause cause) {
         if (arena == null || victim == null) return;
         MatchSession session = sessionsByArena.get(arena.getName());
         if (session == null) return;
@@ -587,10 +651,12 @@ public final class MatchLifecycleService {
         Team team = resolveTeamFromArena(arena, uuid);
         session.setTeam(uuid, team);
 
+        String causeName = cause != null ? cause.name() : null;
+
         if (!countingDeathStats) {
             // Still log the event but skip stat increment.
             session.addEvent(MatchEvent.playerDeath(now(), uuid.toString(), victim.getName(),
-                    team != null ? team.name() : null, fatalDeath));
+                    team != null ? team.name() : null, fatalDeath, causeName));
             if (fatalDeath && team != null) {
                 session.markPlayerFinalDead(team, uuid);
                 maybeMarkTeamEliminated(arena, session, team);
@@ -600,7 +666,7 @@ public final class MatchLifecycleService {
 
         session.addTriggerIncrement(uuid, "bedwars:deaths", 1L);
         session.addEvent(MatchEvent.playerDeath(now(), uuid.toString(), victim.getName(),
-                team != null ? team.name() : null, fatalDeath));
+                team != null ? team.name() : null, fatalDeath, causeName));
         if (fatalDeath) {
             session.addTriggerIncrement(uuid, "bedwars:final_deaths", 1L);
 
@@ -612,7 +678,8 @@ public final class MatchLifecycleService {
         }
     }
 
-    public void onKill(Arena arena, Player killer, Player victim, boolean fatalDeath, boolean countingKillStats) {
+    public void onKill(Arena arena, Player killer, Player victim, boolean fatalDeath, boolean countingKillStats,
+                       EntityDamageEvent.DamageCause cause) {
         if (arena == null || killer == null || !countingKillStats) return;
         MatchSession session = sessionsByArena.get(arena.getName());
         if (session == null) return;
@@ -627,7 +694,8 @@ public final class MatchLifecycleService {
         session.addTriggerIncrement(uuid, "bedwars:kills", 1L);
         String victimName = victim != null ? victim.getName() : null;
         session.addEvent(MatchEvent.playerKill(now(), uuid.toString(), killer.getName(),
-                killerTeam != null ? killerTeam.name() : null, victimName, fatalDeath));
+                killerTeam != null ? killerTeam.name() : null, victimName, fatalDeath,
+                cause != null ? cause.name() : null));
         if (fatalDeath) {
             session.addTriggerIncrement(uuid, "bedwars:final_kills", 1L);
         }
@@ -680,15 +748,28 @@ public final class MatchLifecycleService {
     }
 
     /**
-     * Called when MBedwars assigns or changes a player's team (e.g. during lobby assignment).
-     * Promotes pending players to real participants the moment they receive a team.
+     * Called when MBedwars assigns or changes a player's team (e.g. during lobby assignment, or
+     * a mid-match auto-balance/team switch). Promotes pending players to real participants the
+     * moment they receive a team.
      */
-    public void onPlayerTeamAssigned(Arena arena, Player player, Team newTeam) {
-        if (arena == null || player == null || newTeam == null) return;
+    public void onPlayerTeamAssigned(Arena arena, Player player, Team oldTeam, Team newTeam) {
+        if (arena == null || player == null) return;
         MatchSession session = sessionsByArena.get(arena.getName());
         if (session == null) return;
 
         UUID uuid = player.getUniqueId();
+
+        // A switch (or removal) away from a team must clean up that team's alive-tracking —
+        // otherwise the switching player stays a "ghost" alive entry on their old team forever
+        // (their future deaths get attributed to the new team instead), which can permanently
+        // block the old team from ever being detected as fully eliminated.
+        if (oldTeam != null && !oldTeam.equals(newTeam)) {
+            session.markPlayerFinalDead(oldTeam, uuid);
+            maybeMarkTeamEliminated(arena, session, oldTeam);
+        }
+
+        if (newTeam == null) return; // team removed, not (re)assigned — nothing further to promote
+
         session.promoteToParticipant(uuid, newTeam);
         session.setUsername(uuid, player.getName());
         session.markTeamParticipating(newTeam);

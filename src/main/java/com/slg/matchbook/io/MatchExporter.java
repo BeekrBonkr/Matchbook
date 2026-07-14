@@ -326,7 +326,7 @@ public final class MatchExporter {
 
             out.println("# match: " + matchCode);
             out.println("offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,"
-                    + "killer_name,killer_uuid,killer_team,bed_team,final");
+                    + "killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating");
 
             for (Map<String, Object> ev : events) {
                 out.println(String.join(",", eventRow(ev)));
@@ -375,7 +375,7 @@ public final class MatchExporter {
 
             out.println("# match_codes: " + String.join(", ", matchCodes));
             out.println("match,offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,"
-                    + "killer_name,killer_uuid,killer_team,bed_team,final");
+                    + "killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating");
 
             for (Map<String, Object> ev : allEvents) {
                 List<String> row = new ArrayList<>();
@@ -400,7 +400,9 @@ public final class MatchExporter {
                 csv(String.valueOf(ev.getOrDefault("killer_uuid", ""))),
                 csv(String.valueOf(ev.getOrDefault("killer_team", ""))),
                 csv(String.valueOf(ev.getOrDefault("bed_team", ""))),
-                String.valueOf(ev.getOrDefault("final", false))
+                String.valueOf(ev.getOrDefault("final", false)),
+                csv(String.valueOf(ev.getOrDefault("cause", ""))),
+                String.valueOf(ev.getOrDefault("was_spectating", false))
         );
     }
 

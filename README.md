@@ -7,7 +7,7 @@ A Paper plugin that records persistent match history for [MBedwars](https://www.
 ## Features
 
 - **Match history** — every completed BedWars match is saved with per-player stats (kills, deaths, final kills, beds destroyed, wins, losses).
-- **Event log** — every join, leave, death, kill, bed break, and team elimination is recorded with timestamps. Viewable in the GUI and exportable to CSV.
+- **Event log** — every join, leave, death, kill, bed break, and team elimination is recorded with timestamps, including the death/kill cause (fall, void, entity attack, etc.) and whether a leaving player was already eliminated and spectating. Viewable in the GUI and exportable to CSV.
 - **Placement tracking** — 1st, 2nd, 3rd place tracked per team and included in exports. Teams tied for 1st get a dedicated tie stat instead of a false 1st-place credit.
 - **Tie detection** — matches that end without a winner are correctly flagged as ties, with the specific tied teams tracked and shown by color.
 - **In-game GUI** — paginated match list, detailed per-player stats, event timeline viewer.
@@ -16,6 +16,7 @@ A Paper plugin that records persistent match history for [MBedwars](https://www.
 - **PlaceholderAPI** — exposes `%matchbook_matchcode%` for scoreboards/holograms.
 - **Dual storage** — flat YAML files (default) or MySQL/MariaDB with one-command migration.
 - **Auto config updates** — on plugin upgrade, new config keys are added automatically while preserving your existing settings.
+- **Proxy/network safe** — on a hub server with no arenas of its own, Matchbook won't create match records for arenas MBedwars merely knows about over the network (via its remote-arena awareness); it only tracks arenas actually running on that server.
 
 ---
 
@@ -127,11 +128,12 @@ These are kept for backwards compatibility with older permission setups:
 | Lime glass pane | Match started (shows real wall-clock time) |
 | Red glass pane | Match ended (shows duration) |
 | Lime dye | Player joined |
-| Red dye | Player left |
-| Skeleton skull | Regular death |
-| Wither skeleton skull | Final death (eliminated) |
-| Iron sword | Regular kill |
-| Golden sword | Final kill |
+| Red dye | Player left (still an active player) |
+| Gray dye | Player left while spectating (already eliminated) |
+| Skeleton skull | Regular death (shows cause when available, e.g. Fall, Void, Entity Attack) |
+| Wither skeleton skull | Final death / eliminated (shows cause when available) |
+| Iron sword | Regular kill (shows cause when available) |
+| Golden sword | Final kill (shows cause when available) |
 | TNT | Bed destroyed |
 | Barrier | Team eliminated |
 | Spyglass | Spectator joined |
@@ -157,12 +159,14 @@ uuid,username,team,kills,final_kills,deaths,final_deaths,beds_destroyed,wins,los
 One row per event in chronological order.
 
 ```csv
-offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,killer_name,killer_uuid,killer_team,bed_team,final
-0,1751234567,MATCH_START,,,,,,,, false
-13,1751234580,PLAYER_JOIN,Steve,<uuid>,RED,,,,, false
-58,1751234625,PLAYER_KILL,Alex,<uuid>,BLUE,Steve,<uuid>,RED,,true
+offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating
+0,1751234567,MATCH_START,,,,,,,,false,,false
+13,1751234580,PLAYER_JOIN,Steve,<uuid>,RED,,,,,false,,false
+58,1751234625,PLAYER_KILL,Alex,<uuid>,BLUE,Steve,<uuid>,RED,,true,ENTITY_ATTACK,false
 ...
 ```
+
+`cause` is the Bukkit damage cause (e.g. `FALL`, `VOID`, `ENTITY_ATTACK`, `PROJECTILE`) and is only populated for `PLAYER_DEATH`/`PLAYER_KILL` rows when MBedwars/Bukkit exposed one. `was_spectating` is `true` on a `PLAYER_LEAVE` row when the player had already been eliminated and was spectating at the moment they left.
 
 For multi-match exports, the events CSV includes an extra `match` column at the start and is sorted chronologically across all matches.
 
@@ -254,6 +258,14 @@ Migrate existing YAML data to MySQL (or back) without losing anything:
 ## PlaceholderAPI
 
 If PlaceholderAPI is installed, Matchbook registers the `%matchbook_matchcode%` placeholder. It returns the current active match code for the player's arena (or their last match code for a short grace period after the match ends, so scoreboards don't go blank during transitions).
+
+---
+
+## Multi-Server / Proxy Networks
+
+MBedwars has its own network-wide arena awareness (so hub servers behind a proxy can show live info for arenas hosted on other backend servers). Matchbook only ever creates a match record for an arena that has an actual game world loaded on that specific server — so installing Matchbook on a hub server with no arenas of its own is safe: it will never start tracking (and getting stuck on) matches that are really being played elsewhere on the network. If it ever rejects an arena for this reason, it logs one warning per arena name so you can confirm what happened.
+
+If you run YAML storage per-server, each server's match history stays local to it. Point every server at the same MySQL database (`storage.type: mysql`) if you want one shared, network-wide match history instead.
 
 ---
 

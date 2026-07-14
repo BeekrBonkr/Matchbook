@@ -164,12 +164,14 @@ public final class EventLogGui implements Listener {
     private ItemStack playerLeaveItem(Map<String, Object> ev, String timeLabel) {
         String name = str(ev, "player_name", "Unknown");
         String team = str(ev, "player_team", "");
+        boolean wasSpectating = bool(ev, "was_spectating");
 
-        ItemStack it = new ItemStack(Material.RED_DYE);
+        ItemStack it = new ItemStack(wasSpectating ? Material.GRAY_DYE : Material.RED_DYE);
         ItemMeta meta = it.getItemMeta();
-        meta.setDisplayName(ChatColor.RED + "−" + ChatColor.WHITE + " " + name + teamSuffix(team));
+        meta.setDisplayName((wasSpectating ? ChatColor.DARK_GRAY : ChatColor.RED) + "−" + ChatColor.WHITE
+                + " " + name + teamSuffix(team));
         meta.setLore(List.of(
-                ChatColor.DARK_GRAY + "Player left",
+                ChatColor.DARK_GRAY + (wasSpectating ? "Left while spectating (already eliminated)" : "Left the match"),
                 ChatColor.GRAY + "At: " + ChatColor.WHITE + timeLabel
         ));
         it.setItemMeta(meta);
@@ -180,6 +182,7 @@ public final class EventLogGui implements Listener {
         String name = str(ev, "player_name", "Unknown");
         String team = str(ev, "player_team", "");
         boolean fatal = bool(ev, "final");
+        String cause = str(ev, "cause", "");
 
         Material mat = fatal ? Material.WITHER_SKELETON_SKULL : Material.SKELETON_SKULL;
         ItemStack it = new ItemStack(mat);
@@ -192,10 +195,11 @@ public final class EventLogGui implements Listener {
             meta.setDisplayName(ChatColor.RED + "☠ " + ChatColor.WHITE + name
                     + teamSuffix(team) + ChatColor.DARK_GRAY + " died");
         }
-        meta.setLore(List.of(
-                ChatColor.GRAY + "At: " + ChatColor.WHITE + timeLabel,
-                ChatColor.GRAY + "Type: " + (fatal ? ChatColor.DARK_RED + "Final death" : ChatColor.GRAY + "Regular death")
-        ));
+        List<String> lore = new ArrayList<>();
+        lore.add(ChatColor.GRAY + "At: " + ChatColor.WHITE + timeLabel);
+        lore.add(ChatColor.GRAY + "Type: " + (fatal ? ChatColor.DARK_RED + "Final death" : ChatColor.GRAY + "Regular death"));
+        if (!cause.isBlank()) lore.add(ChatColor.GRAY + "Cause: " + ChatColor.WHITE + formatCause(cause));
+        meta.setLore(lore);
         it.setItemMeta(meta);
         return it;
     }
@@ -205,6 +209,7 @@ public final class EventLogGui implements Listener {
         String killerTeam = str(ev, "killer_team", "");
         String victim     = str(ev, "player_name", "");
         boolean finalKill = bool(ev, "final");
+        String cause      = str(ev, "cause", "");
 
         ItemStack it = new ItemStack(finalKill ? Material.GOLDEN_SWORD : Material.IRON_SWORD);
         ItemMeta meta = it.getItemMeta();
@@ -216,6 +221,7 @@ public final class EventLogGui implements Listener {
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + "At: " + ChatColor.WHITE + timeLabel);
         lore.add(ChatColor.GRAY + "Type: " + (finalKill ? ChatColor.GOLD + "Final kill" : ChatColor.GRAY + "Regular kill"));
+        if (!cause.isBlank()) lore.add(ChatColor.GRAY + "Cause: " + ChatColor.WHITE + formatCause(cause));
         meta.setLore(lore);
         it.setItemMeta(meta);
         return it;
@@ -357,6 +363,19 @@ public final class EventLogGui implements Listener {
     private static String formatWall(long unix) {
         if (unix <= 0) return "?";
         return new SimpleDateFormat("MMM d, h:mm a").format(new Date(unix * 1000L));
+    }
+
+    /** "ENTITY_ATTACK" -> "Entity Attack" */
+    private static String formatCause(String raw) {
+        if (raw == null || raw.isBlank()) return "Unknown";
+        String[] parts = raw.split("_");
+        StringBuilder sb = new StringBuilder();
+        for (String p : parts) {
+            if (p.isEmpty()) continue;
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(Character.toUpperCase(p.charAt(0))).append(p.substring(1).toLowerCase());
+        }
+        return sb.length() > 0 ? sb.toString() : "Unknown";
     }
 
     private static String teamSuffix(String team) {

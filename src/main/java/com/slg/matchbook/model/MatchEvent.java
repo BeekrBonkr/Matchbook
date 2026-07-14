@@ -16,7 +16,9 @@ public record MatchEvent(
         String killerName,
         String killerTeam,
         String bedTeam,     // team whose bed was broken (BED_BREAK only)
-        boolean isFinal     // fatal death / final kill, depending on type
+        boolean isFinal,    // fatal death / final kill, depending on type
+        String deathCause,  // Bukkit EntityDamageEvent.DamageCause name; PLAYER_DEATH / PLAYER_KILL only
+        boolean wasSpectating // PLAYER_LEAVE only: true if already eliminated (spectating) before they quit
 ) {
 
     public enum EventType {
@@ -38,55 +40,56 @@ public record MatchEvent(
 
     public static MatchEvent matchStart(long timestamp) {
         return new MatchEvent(EventType.MATCH_START, timestamp,
-                null, null, null, null, null, null, null, false);
+                null, null, null, null, null, null, null, false, null, false);
     }
 
     public static MatchEvent matchEnd(long timestamp) {
         return new MatchEvent(EventType.MATCH_END, timestamp,
-                null, null, null, null, null, null, null, false);
+                null, null, null, null, null, null, null, false, null, false);
     }
 
     public static MatchEvent playerJoin(long timestamp, String uuid, String name, String team) {
         return new MatchEvent(EventType.PLAYER_JOIN, timestamp,
-                uuid, name, team, null, null, null, null, false);
+                uuid, name, team, null, null, null, null, false, null, false);
     }
 
-    public static MatchEvent playerLeave(long timestamp, String uuid, String name, String team) {
+    public static MatchEvent playerLeave(long timestamp, String uuid, String name, String team, boolean wasSpectating) {
         return new MatchEvent(EventType.PLAYER_LEAVE, timestamp,
-                uuid, name, team, null, null, null, null, false);
+                uuid, name, team, null, null, null, null, false, null, wasSpectating);
     }
 
-    public static MatchEvent playerDeath(long timestamp, String uuid, String name, String team, boolean fatal) {
+    public static MatchEvent playerDeath(long timestamp, String uuid, String name, String team, boolean fatal,
+                                         String deathCause) {
         return new MatchEvent(EventType.PLAYER_DEATH, timestamp,
-                uuid, name, team, null, null, null, null, fatal);
+                uuid, name, team, null, null, null, null, fatal, deathCause, false);
     }
 
     public static MatchEvent playerKill(long timestamp, String killerUuid, String killerName, String killerTeam,
-                                        String victimName, boolean finalKill) {
+                                        String victimName, boolean finalKill, String deathCause) {
         // victim name stored in playerName for display convenience; killerUuid/Name/Team track the killer
         return new MatchEvent(EventType.PLAYER_KILL, timestamp,
-                null, victimName, null, killerUuid, killerName, killerTeam, null, finalKill);
+                null, victimName, null, killerUuid, killerName, killerTeam, null, finalKill, deathCause, false);
     }
 
     public static MatchEvent bedBreak(long timestamp, String breakerUuid, String breakerName, String breakerTeam,
                                       String bedTeam) {
         return new MatchEvent(EventType.BED_BREAK, timestamp,
-                breakerUuid, breakerName, breakerTeam, null, null, null, bedTeam, false);
+                breakerUuid, breakerName, breakerTeam, null, null, null, bedTeam, false, null, false);
     }
 
     public static MatchEvent teamEliminate(long timestamp, String teamName) {
         return new MatchEvent(EventType.TEAM_ELIMINATE, timestamp,
-                null, null, teamName, null, null, null, null, false);
+                null, null, teamName, null, null, null, null, false, null, false);
     }
 
     public static MatchEvent spectatorJoin(long timestamp, String uuid, String name) {
         return new MatchEvent(EventType.SPECTATOR_JOIN, timestamp,
-                uuid, name, null, null, null, null, null, false);
+                uuid, name, null, null, null, null, null, false, null, false);
     }
 
     public static MatchEvent spectatorLeave(long timestamp, String uuid, String name) {
         return new MatchEvent(EventType.SPECTATOR_LEAVE, timestamp,
-                uuid, name, null, null, null, null, null, false);
+                uuid, name, null, null, null, null, null, false, null, false);
     }
 
     // ---------------------------------------------------------------------------

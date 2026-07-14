@@ -50,6 +50,13 @@ public final class MatchSession {
     /** Elimination order of teams (first eliminated first). */
     public final java.util.List<Team> eliminationOrder = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
+    /**
+     * Team count frozen once the round-start roster is fully known (see {@link #freezeTotalTeams()}).
+     * Prevents an elimination detected before every team has generated a tracking event from computing
+     * placement against an undercounted, still-growing {@link #participatingTeams} set.
+     */
+    private volatile int frozenTotalTeams = 0;
+
     // Debug/proof of timing
     public volatile Long startSnapshotTakenUnix = null;
 
@@ -317,8 +324,25 @@ public Set<UUID> getParticipants() {
         return alive == null || alive.isEmpty();
     }
 
+    /** True if this player is currently tracked as alive on the given team. */
+    public boolean isPlayerAlive(Team team, UUID uuid) {
+        if (team == null || uuid == null) return false;
+        Set<UUID> alive = alivePlayersByTeam.get(team);
+        return alive != null && alive.contains(uuid);
+    }
+
+    /**
+     * Freezes the total-team count at (at least) the currently known participating teams.
+     * Should be called once the round-start player roster has been fully processed, so that
+     * placement math has a stable denominator even if {@link #participatingTeams} is still being
+     * populated by late-arriving join/assignment events.
+     */
+    public void freezeTotalTeams() {
+        frozenTotalTeams = Math.max(frozenTotalTeams, participatingTeams.size());
+    }
+
     public int totalTeams() {
-        return Math.max(0, participatingTeams.size());
+        return Math.max(frozenTotalTeams, participatingTeams.size());
     }
 
     // ---------------------------------------------------------------------------

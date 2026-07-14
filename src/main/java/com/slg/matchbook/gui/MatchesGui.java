@@ -41,51 +41,73 @@ public final class MatchesGui implements Listener {
     // -----------------------------------------------------------------------
 
     public void openHistory(Player viewer, UUID targetUuid, int page) {
-        List<String> matchIds = plugin.getRepo().listMatchIdsForPlayer(targetUuid);
+        UUID viewerUuid = viewer.getUniqueId();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            List<String> matchIds = plugin.getRepo().listMatchIdsForPlayer(targetUuid);
 
-        int maxPage = matchIds.isEmpty() ? 0 : Math.max(0, (matchIds.size() - 1) / PAGE_SLOTS);
-        int p = Math.max(0, Math.min(page, maxPage));
+            int maxPage = matchIds.isEmpty() ? 0 : Math.max(0, (matchIds.size() - 1) / PAGE_SLOTS);
+            int p = Math.max(0, Math.min(page, maxPage));
 
-        String title = ChatColor.DARK_GRAY + "Match History "
-                + ChatColor.DARK_GRAY + "• " + ChatColor.GRAY
-                + (p + 1) + "/" + (maxPage + 1);
+            int start = p * PAGE_SLOTS;
+            int end   = Math.min(matchIds.size(), start + PAGE_SLOTS);
+            List<ItemStack> items = new ArrayList<>();
+            for (int i = start; i < end; i++) {
+                items.add(buildMatchItem(viewerUuid, matchIds.get(i)));
+            }
 
-        Inventory inv = Bukkit.createInventory(new HistoryHolder(viewer.getUniqueId(), targetUuid, p), SIZE, title);
+            int maxPageFinal = maxPage;
+            int pFinal = p;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!viewer.isOnline()) return;
 
-        buildNavBar(inv, p, maxPage, true);
+                String title = ChatColor.DARK_GRAY + "Match History "
+                        + ChatColor.DARK_GRAY + "• " + ChatColor.GRAY
+                        + (pFinal + 1) + "/" + (maxPageFinal + 1);
 
-        int start = p * PAGE_SLOTS;
-        int end   = Math.min(matchIds.size(), start + PAGE_SLOTS);
-        int slot  = 0;
-        for (int i = start; i < end; i++) {
-            inv.setItem(slot++, buildMatchItem(viewer.getUniqueId(), matchIds.get(i)));
-        }
+                Inventory inv = Bukkit.createInventory(new HistoryHolder(viewerUuid, targetUuid, pFinal), SIZE, title);
+                buildNavBar(inv, pFinal, maxPageFinal, true);
 
-        viewer.openInventory(inv);
+                int slot = 0;
+                for (ItemStack it : items) inv.setItem(slot++, it);
+
+                viewer.openInventory(inv);
+            });
+        });
     }
 
     public void openAll(Player viewer, int page) {
-        List<String> matchIds = plugin.getRepo().listAllMatchIds();
+        UUID viewerUuid = viewer.getUniqueId();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            List<String> matchIds = plugin.getRepo().listAllMatchIds();
 
-        int maxPage = matchIds.isEmpty() ? 0 : Math.max(0, (matchIds.size() - 1) / PAGE_SLOTS);
-        int p = Math.max(0, Math.min(page, maxPage));
+            int maxPage = matchIds.isEmpty() ? 0 : Math.max(0, (matchIds.size() - 1) / PAGE_SLOTS);
+            int p = Math.max(0, Math.min(page, maxPage));
 
-        String title = ChatColor.DARK_GRAY + "All Matches "
-                + ChatColor.DARK_GRAY + "• " + ChatColor.GRAY
-                + (p + 1) + "/" + (maxPage + 1);
+            int start = p * PAGE_SLOTS;
+            int end   = Math.min(matchIds.size(), start + PAGE_SLOTS);
+            List<ItemStack> items = new ArrayList<>();
+            for (int i = start; i < end; i++) {
+                items.add(buildMatchItem(viewerUuid, matchIds.get(i)));
+            }
 
-        Inventory inv = Bukkit.createInventory(new AllHolder(viewer.getUniqueId(), p), SIZE, title);
+            int maxPageFinal = maxPage;
+            int pFinal = p;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!viewer.isOnline()) return;
 
-        buildNavBar(inv, p, maxPage, false);
+                String title = ChatColor.DARK_GRAY + "All Matches "
+                        + ChatColor.DARK_GRAY + "• " + ChatColor.GRAY
+                        + (pFinal + 1) + "/" + (maxPageFinal + 1);
 
-        int start = p * PAGE_SLOTS;
-        int end   = Math.min(matchIds.size(), start + PAGE_SLOTS);
-        int slot  = 0;
-        for (int i = start; i < end; i++) {
-            inv.setItem(slot++, buildMatchItem(viewer.getUniqueId(), matchIds.get(i)));
-        }
+                Inventory inv = Bukkit.createInventory(new AllHolder(viewerUuid, pFinal), SIZE, title);
+                buildNavBar(inv, pFinal, maxPageFinal, false);
 
-        viewer.openInventory(inv);
+                int slot = 0;
+                for (ItemStack it : items) inv.setItem(slot++, it);
+
+                viewer.openInventory(inv);
+            });
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -143,30 +165,49 @@ public final class MatchesGui implements Listener {
 
         String viewerBase = "players." + viewerUuid;
         String viewerTeam = yml.getString(viewerBase + ".team", "");
+        String viewerDye  = yml.getString(viewerBase + ".team_color", null);
 
-        String pastTense = outcomePastTense(result, viewerTeam);
-        ChatColor outcomeColor = switch (pastTense) {
-            case "Won"  -> ChatColor.GREEN;
-            case "Lost" -> ChatColor.RED;
-            case "Tied" -> ChatColor.YELLOW;
-            default     -> ChatColor.AQUA;
-        };
-        Material mat = switch (pastTense) {
-            case "Won"  -> Material.LIME_WOOL;
-            case "Lost" -> Material.RED_WOOL;
-            case "Tied" -> Material.YELLOW_WOOL;
-            default     -> Material.PAPER;
-        };
+        String resultUpper = result == null ? "" : result.toUpperCase(Locale.ROOT);
+        boolean isTie = resultUpper.equals("TIE");
+        boolean isWin = resultUpper.startsWith("WIN:");
+
+        String titleLine;
+        Material mat;
+
+        if (isWin) {
+            String winTeam = result.substring("WIN:".length()).trim();
+            String winDye = winTeam.equalsIgnoreCase(viewerTeam) ? viewerDye : findTeamDyeColor(yml, winTeam);
+            String label = winTeam.isBlank() ? "?" : winTeam;
+            titleLine = teamColor(winTeam, winDye) + "" + ChatColor.BOLD + label + " WIN";
+            mat = teamWool(winTeam, winDye);
+        } else if (isTie) {
+            List<String> tiedTeams = yml.getStringList("match.tied_teams");
+            if (tiedTeams.isEmpty()) {
+                titleLine = ChatColor.YELLOW + "" + ChatColor.BOLD + "TIE";
+            } else {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < tiedTeams.size(); i++) {
+                    String t = tiedTeams.get(i);
+                    String dye = t.equalsIgnoreCase(viewerTeam) ? viewerDye : findTeamDyeColor(yml, t);
+                    if (i > 0) sb.append(ChatColor.GRAY).append(", ");
+                    sb.append(teamColor(t, dye)).append(ChatColor.BOLD).append(t.isBlank() ? "?" : t);
+                }
+                sb.append(ChatColor.RESET).append(' ').append(ChatColor.YELLOW).append(ChatColor.BOLD).append("TIE");
+                titleLine = sb.toString();
+            }
+            mat = Material.YELLOW_WOOL;
+        } else {
+            titleLine = ChatColor.AQUA + "" + ChatColor.BOLD + "PLAYED";
+            mat = Material.PAPER;
+        }
 
         ItemStack it = new ItemStack(mat);
         ItemMeta meta = it.getItemMeta();
         meta.getPersistentDataContainer().set(KEY_MATCH_ID, PersistentDataType.STRING, matchId);
 
         meta.setDisplayName(
-                outcomeColor + "" + ChatColor.BOLD + pastTense
+                titleLine
                 + ChatColor.RESET + ChatColor.DARK_GRAY + " • "
-                + teamColor(viewerTeam) + (viewerTeam.isBlank() ? "?" : viewerTeam)
-                + ChatColor.DARK_GRAY + " • "
                 + ChatColor.WHITE + matchId
         );
 
@@ -177,6 +218,9 @@ public final class MatchesGui implements Listener {
             lore.add(ChatColor.GRAY + "Length: " + ChatColor.WHITE + formatDuration((int) duration));
         }
         lore.add(ChatColor.GRAY + "Players: " + ChatColor.WHITE + participantCount);
+        if (!viewerTeam.isBlank()) {
+            lore.add(ChatColor.GRAY + "Your team: " + teamColor(viewerTeam, viewerDye) + viewerTeam);
+        }
         lore.add("");
 
         // Viewer stats
@@ -280,32 +324,105 @@ public final class MatchesGui implements Listener {
         return m + "m " + s + "s";
     }
 
-    public static ChatColor teamColor(String team) {
-        if (team == null) return ChatColor.GRAY;
-        return switch (team.toUpperCase(Locale.ROOT)) {
-            case "RED"              -> ChatColor.RED;
-            case "BLUE"             -> ChatColor.BLUE;
-            case "GREEN", "LIME"    -> ChatColor.GREEN;
-            case "YELLOW"           -> ChatColor.YELLOW;
-            case "PINK"             -> ChatColor.LIGHT_PURPLE;
-            case "AQUA", "CYAN"     -> ChatColor.AQUA;
-            case "WHITE"            -> ChatColor.WHITE;
-            case "GRAY", "GREY"     -> ChatColor.DARK_GRAY;
-            case "ORANGE"           -> ChatColor.GOLD;
-            case "PURPLE"           -> ChatColor.DARK_PURPLE;
-            default                 -> ChatColor.GRAY;
-        };
+    // -----------------------------------------------------------------------
+    // Team color / wool resolution
+    //
+    // MBedwars' Team enum has 16 members (YELLOW, ORANGE, RED, BLUE, LIGHT_BLUE, CYAN, LIGHT_GREEN,
+    // GREEN, PURPLE, PINK, WHITE, LIGHT_GRAY, GRAY, BROWN, BLACK, MAGENTA), each with its own
+    // org.bukkit.DyeColor that an admin can reassign per-arena. Saved matches persist that DyeColor
+    // (players.<uuid>.team_color) at save time via MatchYamlCodec; that's the source of truth here.
+    // TEAM_NAME_TO_DYE below is only a fallback for matches saved before that field existed, or for
+    // callers (event log) that only have the bare team name string.
+    // -----------------------------------------------------------------------
+
+    /** Fixed, stable display order for teams — mirrors MBedwars' Team enum declaration order. */
+    public static final List<String> FIXED_TEAM_ORDER = List.of(
+            "YELLOW", "ORANGE", "RED", "BLUE", "LIGHT_BLUE", "CYAN", "LIGHT_GREEN", "GREEN",
+            "PURPLE", "PINK", "WHITE", "LIGHT_GRAY", "GRAY", "BROWN", "BLACK", "MAGENTA"
+    );
+
+    private static final Map<String, String> TEAM_NAME_TO_DYE = Map.ofEntries(
+            Map.entry("YELLOW", "YELLOW"),
+            Map.entry("ORANGE", "ORANGE"),
+            Map.entry("RED", "RED"),
+            Map.entry("BLUE", "BLUE"),
+            Map.entry("LIGHT_BLUE", "LIGHT_BLUE"),
+            Map.entry("AQUA", "LIGHT_BLUE"),
+            Map.entry("CYAN", "CYAN"),
+            Map.entry("LIGHT_GREEN", "LIME"),
+            Map.entry("LIME", "LIME"),
+            Map.entry("GREEN", "GREEN"),
+            Map.entry("PURPLE", "PURPLE"),
+            Map.entry("PINK", "PINK"),
+            Map.entry("WHITE", "WHITE"),
+            Map.entry("LIGHT_GRAY", "LIGHT_GRAY"),
+            Map.entry("GREY", "GRAY"),
+            Map.entry("GRAY", "GRAY"),
+            Map.entry("BROWN", "BROWN"),
+            Map.entry("BLACK", "BLACK"),
+            Map.entry("MAGENTA", "MAGENTA")
+    );
+
+    private static final Map<String, ChatColor> DYE_TO_CHAT = Map.ofEntries(
+            Map.entry("WHITE", ChatColor.WHITE),
+            Map.entry("ORANGE", ChatColor.GOLD),
+            Map.entry("MAGENTA", ChatColor.LIGHT_PURPLE),
+            Map.entry("LIGHT_BLUE", ChatColor.AQUA),
+            Map.entry("YELLOW", ChatColor.YELLOW),
+            Map.entry("LIME", ChatColor.GREEN),
+            Map.entry("PINK", ChatColor.LIGHT_PURPLE),
+            Map.entry("GRAY", ChatColor.DARK_GRAY),
+            Map.entry("LIGHT_GRAY", ChatColor.GRAY),
+            Map.entry("CYAN", ChatColor.DARK_AQUA),
+            Map.entry("PURPLE", ChatColor.DARK_PURPLE),
+            Map.entry("BLUE", ChatColor.DARK_BLUE),
+            Map.entry("BROWN", ChatColor.DARK_RED),
+            Map.entry("GREEN", ChatColor.DARK_GREEN),
+            Map.entry("RED", ChatColor.RED),
+            Map.entry("BLACK", ChatColor.BLACK)
+    );
+
+    /** Resolves the DyeColor name to use for a team: prefers the persisted color, falls back to name. */
+    public static String resolveDyeColorName(String team, String persistedDyeColor) {
+        if (persistedDyeColor != null && !persistedDyeColor.isBlank()) {
+            return persistedDyeColor.toUpperCase(Locale.ROOT);
+        }
+        if (team == null) return "WHITE";
+        return TEAM_NAME_TO_DYE.getOrDefault(team.toUpperCase(Locale.ROOT), "WHITE");
     }
 
-    private static String outcomePastTense(String result, String viewerTeam) {
-        if (result == null || result.isBlank()) return "Played";
-        if (result.equalsIgnoreCase("TIE")) return "Tied";
-        if (result.toUpperCase(Locale.ROOT).startsWith("WIN:")) {
-            String winTeam = result.substring("WIN:".length()).trim();
-            if (viewerTeam != null && !viewerTeam.isBlank() && winTeam.equalsIgnoreCase(viewerTeam)) return "Won";
-            return "Lost";
+    public static ChatColor teamColor(String team) {
+        return teamColor(team, null);
+    }
+
+    public static ChatColor teamColor(String team, String persistedDyeColor) {
+        return DYE_TO_CHAT.getOrDefault(resolveDyeColorName(team, persistedDyeColor), ChatColor.GRAY);
+    }
+
+    public static Material teamWool(String team) {
+        return teamWool(team, null);
+    }
+
+    public static Material teamWool(String team, String persistedDyeColor) {
+        String dye = resolveDyeColorName(team, persistedDyeColor);
+        try {
+            return Material.valueOf(dye + "_WOOL");
+        } catch (IllegalArgumentException ex) {
+            return Material.WHITE_WOOL;
         }
-        return "Played";
+    }
+
+    /** Finds the persisted dye color for a team by scanning participants (used when the viewer isn't on that team). */
+    private static String findTeamDyeColor(YamlConfiguration yml, String teamName) {
+        if (yml == null || teamName == null || teamName.isBlank()) return null;
+        for (String uuidStr : yml.getStringList("match.participants")) {
+            String t = yml.getString("players." + uuidStr + ".team", "");
+            if (teamName.equalsIgnoreCase(t)) {
+                String dye = yml.getString("players." + uuidStr + ".team_color", null);
+                if (dye != null) return dye;
+            }
+        }
+        return null;
     }
 
     // -----------------------------------------------------------------------

@@ -39,45 +39,60 @@ public final class EventLogGui implements Listener {
     // -----------------------------------------------------------------------
 
     public void openEvents(Player viewer, String matchId, int page) {
-        YamlConfiguration yml = plugin.getRepo().loadMatchYaml(matchId);
+        UUID viewerUuid = viewer.getUniqueId();
 
-        List<Map<String, Object>> events = MatchYamlCodec.readRawEvents(yml);
-        long startUnix = yml != null ? yml.getLong("match.start_unix", 0L) : 0L;
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            YamlConfiguration yml = plugin.getRepo().loadMatchYaml(matchId);
 
-        int maxPage = events.isEmpty() ? 0 : Math.max(0, (events.size() - 1) / PAGE_SLOTS);
-        int p = Math.max(0, Math.min(page, maxPage));
+            List<Map<String, Object>> events = MatchYamlCodec.readRawEvents(yml);
+            long startUnix = yml != null ? yml.getLong("match.start_unix", 0L) : 0L;
 
-        String title = ChatColor.DARK_GRAY + "Event Log " + ChatColor.GRAY
-                + "(" + matchId + ") " + ChatColor.DARK_GRAY + "• "
-                + ChatColor.GRAY + (p + 1) + "/" + (maxPage + 1);
+            int maxPage = events.isEmpty() ? 0 : Math.max(0, (events.size() - 1) / PAGE_SLOTS);
+            int p = Math.max(0, Math.min(page, maxPage));
 
-        Inventory inv = Bukkit.createInventory(new EventLogHolder(viewer.getUniqueId(), matchId, p), SIZE, title);
-
-        // Bottom nav bar
-        for (int i = 45; i < 54; i++) inv.setItem(i, navPane());
-        inv.setItem(SLOT_PREV, navButton(Material.ARROW, ChatColor.YELLOW + "Previous Page",
-                ChatColor.GRAY + "Page " + p + " of " + (maxPage + 1)));
-        inv.setItem(SLOT_BACK, navButton(Material.DARK_OAK_DOOR, ChatColor.RED + "Back to Match Details", null));
-        inv.setItem(SLOT_NEXT, navButton(Material.ARROW, ChatColor.YELLOW + "Next Page",
-                ChatColor.GRAY + "Page " + (p + 2) + " of " + (maxPage + 1)));
-
-        if (events.isEmpty()) {
-            ItemStack placeholder = new ItemStack(Material.STRUCTURE_VOID);
-            ItemMeta meta = placeholder.getItemMeta();
-            meta.setDisplayName(ChatColor.GRAY + "No events recorded");
-            meta.setLore(List.of(ChatColor.DARK_GRAY + "This match was saved before event logging was added."));
-            placeholder.setItemMeta(meta);
-            inv.setItem(22, placeholder);
-        } else {
             int start = p * PAGE_SLOTS;
             int end = Math.min(events.size(), start + PAGE_SLOTS);
-            int slot = 0;
+            List<ItemStack> eventItems = new ArrayList<>();
             for (int i = start; i < end; i++) {
-                inv.setItem(slot++, buildEventItem(events.get(i), startUnix));
+                eventItems.add(buildEventItem(events.get(i), startUnix));
             }
-        }
 
-        viewer.openInventory(inv);
+            boolean empty = events.isEmpty();
+            int maxPageFinal = maxPage;
+            int pFinal = p;
+
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!viewer.isOnline()) return;
+
+                String title = ChatColor.DARK_GRAY + "Event Log " + ChatColor.GRAY
+                        + "(" + matchId + ") " + ChatColor.DARK_GRAY + "• "
+                        + ChatColor.GRAY + (pFinal + 1) + "/" + (maxPageFinal + 1);
+
+                Inventory inv = Bukkit.createInventory(new EventLogHolder(viewerUuid, matchId, pFinal), SIZE, title);
+
+                // Bottom nav bar
+                for (int i = 45; i < 54; i++) inv.setItem(i, navPane());
+                inv.setItem(SLOT_PREV, navButton(Material.ARROW, ChatColor.YELLOW + "Previous Page",
+                        ChatColor.GRAY + "Page " + pFinal + " of " + (maxPageFinal + 1)));
+                inv.setItem(SLOT_BACK, navButton(Material.DARK_OAK_DOOR, ChatColor.RED + "Back to Match Details", null));
+                inv.setItem(SLOT_NEXT, navButton(Material.ARROW, ChatColor.YELLOW + "Next Page",
+                        ChatColor.GRAY + "Page " + (pFinal + 2) + " of " + (maxPageFinal + 1)));
+
+                if (empty) {
+                    ItemStack placeholder = new ItemStack(Material.STRUCTURE_VOID);
+                    ItemMeta meta = placeholder.getItemMeta();
+                    meta.setDisplayName(ChatColor.GRAY + "No events recorded");
+                    meta.setLore(List.of(ChatColor.DARK_GRAY + "This match was saved before event logging was added."));
+                    placeholder.setItemMeta(meta);
+                    inv.setItem(22, placeholder);
+                } else {
+                    int slot = 0;
+                    for (ItemStack it : eventItems) inv.setItem(slot++, it);
+                }
+
+                viewer.openInventory(inv);
+            });
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -350,20 +365,7 @@ public final class EventLogGui implements Listener {
     }
 
     private static ChatColor teamColor(String team) {
-        if (team == null) return ChatColor.GRAY;
-        return switch (team.toUpperCase(Locale.ROOT)) {
-            case "RED"                          -> ChatColor.RED;
-            case "BLUE"                         -> ChatColor.BLUE;
-            case "GREEN", "LIME"                -> ChatColor.GREEN;
-            case "YELLOW"                       -> ChatColor.YELLOW;
-            case "PINK"                         -> ChatColor.LIGHT_PURPLE;
-            case "AQUA", "CYAN"                 -> ChatColor.AQUA;
-            case "WHITE"                        -> ChatColor.WHITE;
-            case "GRAY", "GREY"                 -> ChatColor.DARK_GRAY;
-            case "ORANGE"                       -> ChatColor.GOLD;
-            case "PURPLE"                       -> ChatColor.DARK_PURPLE;
-            default                             -> ChatColor.GRAY;
-        };
+        return MatchesGui.teamColor(team);
     }
 
     private static String str(Map<String, Object> m, String key, String def) {

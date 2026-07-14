@@ -25,27 +25,38 @@ public final class MigrationService {
         plugin.getLogger().warning("Matchbook migration: YAML -> MySQL" + (dryRun ? " (dry-run)" : ""));
 
         // We create a separate MySQL repo using current config (even if plugin is running in YAML mode).
+        // Never run schema DDL during a dry-run: it must not mutate the database while only previewing.
         MySqlMatchRepository mysql = new MySqlMatchRepository(plugin, plugin.getMatchbookConfig().raw());
-        mysql.init();
+        mysql.init(!dryRun);
 
         int imported = 0;
+        int failed = 0;
         try {
             for (File f : scanAllYamlMatchFiles(plugin)) {
                 YamlConfiguration yml = YamlConfiguration.loadConfiguration(f);
                 String matchId = yml.getString("match.match_id", "");
                 if (matchId == null || matchId.isBlank()) continue;
 
-                String yamlText = Files.readString(f.toPath(), StandardCharsets.UTF_8);
+                try {
+                    String yamlText = Files.readString(f.toPath(), StandardCharsets.UTF_8);
 
-                if (!dryRun) {
-                    mysql.importMatchFromYaml(yml, yamlText);
+                    if (!dryRun) {
+                        mysql.importMatchFromYaml(yml, yamlText);
+                    }
+                    imported++;
+                } catch (Exception e) {
+                    // One malformed/oversized row must not abort the rest of the batch.
+                    failed++;
+                    plugin.getLogger().warning("Matchbook migration: failed to import " + f.getName() + " (match " + matchId + "): " + e.getMessage());
                 }
-                imported++;
             }
         } finally {
             mysql.shutdown();
         }
 
+        if (failed > 0) {
+            plugin.getLogger().warning("Matchbook migration: YAML -> MySQL finished with " + failed + " failure(s); see warnings above.");
+        }
         return imported;
     }
 
@@ -53,46 +64,56 @@ public final class MigrationService {
         plugin.getLogger().warning("Matchbook migration: MySQL -> YAML" + (dryRun ? " (dry-run)" : ""));
 
         MySqlMatchRepository mysql = new MySqlMatchRepository(plugin, plugin.getMatchbookConfig().raw());
-        mysql.init();
+        mysql.init(!dryRun);
 
         MatchStorage storage = new MatchStorage(plugin);
         UserMatchIndex index = new UserMatchIndex(plugin);
 
         int exported = 0;
+        int failed = 0;
         try {
             List<String> ids = mysql.listAllMatchIds();
             for (String matchId : ids) {
-                YamlConfiguration yml = mysql.loadMatchYaml(matchId);
-                if (yml == null) continue;
+                try {
+                    YamlConfiguration yml = mysql.loadMatchYaml(matchId);
+                    if (yml == null) continue;
 
-                long startUnix = yml.getLong("match.start_unix", 0L);
-                String arena = yml.getString("match.arena", "");
-                if (startUnix <= 0L || arena == null) continue;
+                    long startUnix = yml.getLong("match.start_unix", 0L);
+                    String arena = yml.getString("match.arena", "");
+                    if (startUnix <= 0L || arena == null) continue;
 
-                String md5 = MatchStorage.md5Hex(arena);
-                File dayFolder = storage.getDayFolder(new Date(startUnix * 1000L));
-                File out = safeOutFile(dayFolder, startUnix, md5, matchId);
+                    String md5 = MatchStorage.md5Hex(arena);
+                    File dayFolder = storage.getDayFolder(new Date(startUnix * 1000L));
+                    File out = safeOutFile(dayFolder, startUnix, md5, matchId);
 
-                if (!dryRun) {
-                    yml.save(out);
+                    if (!dryRun) {
+                        yml.save(out);
 
-                    // Update user indexes (best-effort)
-                    String relative = out.getParentFile().getName() + "/" + out.getName();
-                    List<String> participants = yml.getStringList("match.participants");
-                    for (String uuidStr : participants) {
-                        try {
-                            UUID u = UUID.fromString(uuidStr);
-                            index.addMatchForPlayer(u, matchId, relative);
-                        } catch (Exception ignored) {}
+                        // Update user indexes (best-effort)
+                        String relative = out.getParentFile().getName() + "/" + out.getName();
+                        List<String> participants = yml.getStringList("match.participants");
+                        for (String uuidStr : participants) {
+                            try {
+                                UUID u = UUID.fromString(uuidStr);
+                                index.addMatchForPlayer(u, matchId, relative);
+                            } catch (Exception ignored) {}
+                        }
                     }
-                }
 
-                exported++;
+                    exported++;
+                } catch (Exception e) {
+                    // One malformed row must not abort the rest of the batch.
+                    failed++;
+                    plugin.getLogger().warning("Matchbook migration: failed to export match " + matchId + ": " + e.getMessage());
+                }
             }
         } finally {
             mysql.shutdown();
         }
 
+        if (failed > 0) {
+            plugin.getLogger().warning("Matchbook migration: MySQL -> YAML finished with " + failed + " failure(s); see warnings above.");
+        }
         return exported;
     }
 
@@ -130,6 +151,9 @@ public final class MigrationService {
         }
 
         // Fallback: incorporate matchId to ensure uniqueness, but keep it human-scannable.
-        return new File(dayFolder, startUnix + "-" + arenaMd5 + "-" + matchId + ".yml");
+        // Sanitize: matchId ultimately comes from a MySQL row, which could be from a shared/tampered
+        // DB — never let it inject path separators into the target file path.
+        String safeId = matchId == null ? "" : matchId.replaceAll("[^a-zA-Z0-9._-]", "_");
+        return new File(dayFolder, startUnix + "-" + arenaMd5 + "-" + safeId + ".yml");
     }
 }

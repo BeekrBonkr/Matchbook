@@ -38,6 +38,9 @@ public final class MatchYamlCodec {
         yml.set("match.arena", doc.arenaName());
         yml.set("match.result", doc.result());
         yml.set("match.start_snapshot_taken_unix", doc.startSnapshotTakenUnix());
+        if (doc.tiedTeams() != null && !doc.tiedTeams().isEmpty()) {
+            yml.set("match.tied_teams", doc.tiedTeams());
+        }
 
         List<String> participants = new ArrayList<>();
         for (UUID u : doc.participants()) participants.add(u.toString());
@@ -62,6 +65,18 @@ public final class MatchYamlCodec {
             String base = "players." + e.uuid();
             yml.set(base + ".username", e.username());
             yml.set(base + ".team", e.team() != null ? e.team().name() : null);
+            // Persist the arena's actual configured bed/wool color for this team (not just the enum
+            // name) so the GUI renders the right color even when an admin has recolored a team, and
+            // so old data stays self-contained if MBedwars' defaults change later.
+            if (e.team() != null) {
+                org.bukkit.DyeColor dye = null;
+                try {
+                    dye = e.team().getDyeColor();
+                } catch (Throwable ignored) {
+                    // Defensive: some MBedwars builds/team configs may not expose a dye color.
+                }
+                if (dye != null) yml.set(base + ".team_color", dye.name());
+            }
             yml.set(base + ".start_taken_unix", e.startTakenUnix());
 
             if (e.start() != null) yml.createSection(base + ".start", e.start());

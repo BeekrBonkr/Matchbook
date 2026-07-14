@@ -24,13 +24,28 @@ public final class HasteUploader {
     private final HttpClient client;
 
     public HasteUploader(String serverUrl) {
-        this.serverUrl = serverUrl == null || serverUrl.isBlank()
+        this.serverUrl = validate(serverUrl == null || serverUrl.isBlank()
                 ? "https://hastebin.com"
-                : serverUrl.stripTrailing().replaceAll("/+$", "");
+                : serverUrl.stripTrailing().replaceAll("/+$", ""));
         this.client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
+    }
+
+    /** Only http(s) URLs are ever intended here; reject anything else (e.g. file:, jar:) up front. */
+    private static String validate(String url) {
+        URI uri;
+        try {
+            uri = URI.create(url);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid export_upload.server URL: " + url, e);
+        }
+        String scheme = uri.getScheme();
+        if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+            throw new IllegalArgumentException("export_upload.server must be an http(s) URL, got: " + url);
+        }
+        return url;
     }
 
     /**

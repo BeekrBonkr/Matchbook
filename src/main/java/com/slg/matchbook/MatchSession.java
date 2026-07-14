@@ -5,7 +5,6 @@ import de.marcely.bedwars.api.arena.Team;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -28,14 +27,16 @@ public final class MatchSession {
     public volatile Long endUnix = null;
     public final String matchId;
 
-    public final Set<de.marcely.bedwars.api.arena.Team> bedLostTeams = new HashSet<>();
+    // Thread-safe: mutated from both the main thread (event handlers) and the async MBedwars
+    // stats-callback chain that runs finalizePlacements()/getArenaTeamsSafe() at round end.
+    public final Set<de.marcely.bedwars.api.arena.Team> bedLostTeams = ConcurrentHashMap.newKeySet();
 
     // ---------------------------
     // Placement tracking
     // ---------------------------
 
     /** Teams that participated in this match (derived from player membership). */
-    public final Set<Team> participatingTeams = new HashSet<>();
+    public final Set<Team> participatingTeams = ConcurrentHashMap.newKeySet();
 
     /**
      * Alive players (by UUID) per team. Players are removed on fatal (final) death.
@@ -365,10 +366,17 @@ public Set<UUID> getParticipants() {
      * Keys are stored as:
      *   matchbook:1st_place, matchbook:2nd_place, ...
      *
+     * Teams tied for 1st (more than one team holds placement 1) are NOT given matchbook:1st_place —
+     * a tie is not a win. Those players get matchbook:ties instead, mirroring how MatchDocument
+     * marks a whole-match tie.
+     *
      * This makes CSV multi-export aggregation "just work" by summation.
      */
     public void applyPlacementsToMatchStats() {
         if (placementByTeam.isEmpty()) return;
+
+        long firstPlaceTeams = placementByTeam.values().stream().filter(p -> p != null && p == 1).count();
+        boolean tiedForFirst = firstPlaceTeams > 1;
 
         for (UUID uuid : participants) {
             Team t = teamByPlayer.get(uuid);
@@ -376,12 +384,24 @@ public Set<UUID> getParticipants() {
             Integer place = placementByTeam.get(t);
             if (place == null || place <= 0) continue;
 
-            String key = "matchbook:" + ordinal(place) + "_place";
+            String key = (place == 1 && tiedForFirst) ? "matchbook:ties" : "matchbook:" + ordinal(place) + "_place";
             StatSnapshot existing = matchStats.get(uuid);
             var out = existing != null ? new java.util.LinkedHashMap<>(existing.values()) : new java.util.LinkedHashMap<String, Long>();
             out.put(key, out.getOrDefault(key, 0L) + 1L);
             matchStats.put(uuid, new StatSnapshot(out));
         }
+    }
+
+    /** Team names currently tied for 1st place (empty unless more than one team holds placement 1). */
+    public List<String> getTiedTeamNames() {
+        long firstPlaceTeams = placementByTeam.values().stream().filter(p -> p != null && p == 1).count();
+        if (firstPlaceTeams <= 1) return List.of();
+
+        List<String> out = new ArrayList<>();
+        for (var e : placementByTeam.entrySet()) {
+            if (e.getValue() != null && e.getValue() == 1 && e.getKey() != null) out.add(e.getKey().name());
+        }
+        return out;
     }
 
     private static String ordinal(int n) {

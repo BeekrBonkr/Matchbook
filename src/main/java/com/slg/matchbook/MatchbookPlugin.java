@@ -122,9 +122,12 @@ public final class MatchbookPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        if (repo != null) repo.shutdown();
+        // Save synchronously and BEFORE closing the repo: the scheduler refuses async tasks once the
+        // plugin is marked disabled (which happens before onDisable() runs), so anything scheduled here
+        // would throw immediately and silently drop in-progress matches.
+        if (lifecycle != null) lifecycle.flushAll("plugin-disable", true);
 
-        if (lifecycle != null) lifecycle.flushAll("plugin-disable");
+        if (repo != null) repo.shutdown();
     }
 
     /**

@@ -38,6 +38,14 @@ public final class MySqlMatchRepository implements MatchRepository {
 
     @Override
     public void init() throws Exception {
+        init(true);
+    }
+
+    /**
+     * @param ensureSchema When false, connects without running CREATE TABLE/ALTER TABLE DDL. Used by
+     *                     migration dry-runs, which must not mutate the database while only previewing.
+     */
+    public void init(boolean ensureSchema) throws Exception {
         this.prefix = s("mysql.table_prefix", "storage.mysql.table_prefix", "matchbook_");
 
         String host = s("mysql.host", "storage.mysql.host", "127.0.0.1");
@@ -47,7 +55,7 @@ public final class MySqlMatchRepository implements MatchRepository {
         String password = s("mysql.password", "storage.mysql.password", "");
 
         String params = s("mysql.params", "storage.mysql.params",
-                "useUnicode=true&characterEncoding=utf8&useSSL=true&requireSSL=true&verifyServerCertificate=false&allowPublicKeyRetrieval=true&serverTimezone=UTC");
+                "useUnicode=true&characterEncoding=utf8&useSSL=true&requireSSL=true&verifyServerCertificate=true&allowPublicKeyRetrieval=true&serverTimezone=UTC");
 
         // Safety: trim and strip leading '?'
         params = params == null ? "" : params.trim();
@@ -76,7 +84,7 @@ public final class MySqlMatchRepository implements MatchRepository {
 
         this.ds = new HikariDataSource(hc);
 
-        ensureSchema();
+        if (ensureSchema) ensureSchema();
         plugin.getLogger().info("Matchbook: MySQL storage enabled (" + host + ":" + port + "/" + database + ")");
     }
 

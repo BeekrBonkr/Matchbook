@@ -24,7 +24,8 @@ public record MatchDocument(
         Map<UUID, String> spectatorUsernames,
         Map<UUID, PlayerEntry> players,
         List<String> warnings,
-        List<MatchEvent> events
+        List<MatchEvent> events,
+        List<String> tiedTeams
 ) {
 
     public record PlayerEntry(
@@ -71,6 +72,10 @@ public record MatchDocument(
 
         boolean tie = result != null && result.equalsIgnoreCase("TIE");
         Team winningTeam = session.winningTeam;
+        // Which teams actually tied for 1st. A match-wide "TIE" result does not mean every team tied —
+        // a team eliminated earlier in a 3+-team match still lost outright even if two OTHER teams
+        // ended up tied for 1st. Must not stamp matchbook:ties on players outside this set.
+        List<String> tiedTeamNames = session.getTiedTeamNames();
 
         for (UUID u : participants) {
             String username = session.getUsername(u);
@@ -92,6 +97,10 @@ public record MatchDocument(
             } else if (startSnap != null && endSnap != null) {
                 diff = new LinkedHashMap<>(StatSnapshot.diff(startSnap, endSnap));
             }
+
+            // Whether THIS player's team is one of the teams actually tied for 1st (not just
+            // "the match happened to end in a tie" — see tiedTeamNames comment above).
+            boolean myTeamTied = tie && team != null && tiedTeamNames.contains(team.name());
 
             if (diff != null) {
                 // Clamp negative diffs, annotate warning
@@ -115,15 +124,23 @@ public record MatchDocument(
                         if (losesDiff == 0L) diff.put("bedwars:loses", 1L);
                         if (winsDiff != 0L) diff.put("bedwars:wins", 0L);
                     }
-                } else if (tie) {
+                } else if (myTeamTied) {
                     // Ties count as neither a win nor a loss — prevent MBedwars values from leaking through.
                     if (diff.containsKey("bedwars:wins")) diff.put("bedwars:wins", 0L);
                     if (diff.containsKey("bedwars:loses")) diff.put("bedwars:loses", 0L);
+                } else if (tie && team != null) {
+                    // Match-wide tie between OTHER teams; this team was outright eliminated earlier
+                    // and did not tie for anything, so it's still a loss.
+                    long winsDiff = diff.getOrDefault("bedwars:wins", 0L);
+                    long losesDiff = diff.getOrDefault("bedwars:loses", 0L);
+                    if (losesDiff == 0L) diff.put("bedwars:loses", 1L);
+                    if (winsDiff != 0L) diff.put("bedwars:wins", 0L);
                 }
             }
 
-            // Track ties as a first-class stat (mirrors how matchbook:*_place keys work).
-            if (tie) {
+            // Track ties as a first-class stat (mirrors how matchbook:*_place keys work) — only for
+            // players on a team that actually tied for 1st, not every participant in the match.
+            if (myTeamTied) {
                 if (diff == null) diff = new LinkedHashMap<>();
                 diff.put("matchbook:ties", 1L);
             }
@@ -132,6 +149,7 @@ public record MatchDocument(
         }
 
         List<MatchEvent> events = session.getEvents();
+        List<String> tiedTeams = tiedTeamNames;
 
         return new MatchDocument(
                 session.matchId,
@@ -145,7 +163,8 @@ public record MatchDocument(
                 Collections.unmodifiableMap(spectatorUsernames),
                 Collections.unmodifiableMap(players),
                 warnings.isEmpty() ? null : List.copyOf(warnings),
-                events.isEmpty() ? null : List.copyOf(events)
+                events.isEmpty() ? null : List.copyOf(events),
+                tiedTeams.isEmpty() ? null : List.copyOf(tiedTeams)
         );
     }
 }

@@ -35,7 +35,7 @@ public final class MatchExporter {
             throw new IOException("Could not create exports directory: " + exportsDir.getAbsolutePath());
         }
 
-        File outFile = new File(exportsDir, matchCode + ".csv");
+        File outFile = new File(exportsDir, sanitizeFileName(matchCode) + ".csv");
 
         List<String> columns = resolveColumnsWithPlacements(List.of(yml));
 
@@ -145,6 +145,11 @@ public final class MatchExporter {
 
     private static String csv(String s) {
         if (s == null) return "";
+        // Defuse CSV/formula injection: a cell starting with =, +, -, or @ is executed as a formula
+        // by Excel/Sheets when the file is opened. Prefixing with a single quote forces text mode.
+        if (!s.isEmpty() && "=+-@".indexOf(s.charAt(0)) >= 0) {
+            s = "'" + s;
+        }
         boolean needsQuotes = s.contains(",") || s.contains("\"") || s.contains("\n") || s.contains("\r");
         String cleaned = s.replace("\"", "\"\"");
         return needsQuotes ? ("\"" + cleaned + "\"") : cleaned;

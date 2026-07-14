@@ -382,7 +382,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
             if (canDefault(sender, PERM_EXPORT)) subs.add("export");
             if (canAdmin(sender, PERM_MIGRATE) || sender.hasPermission("matchbook.migrate") || sender.hasPermission("matchbook.admin")) subs.add("migrate");
             if (canAdmin(sender, PERM_RELOAD) || sender.hasPermission("matchbook.admin")) subs.add("reload");
-            if (canAdmin(sender, PERM_STATSKEYS)) subs.add("statskeys");
+            if (canAdmin(sender, PERM_STATSKEYS) || sender.hasPermission("matchbook.admin")) subs.add("statskeys");
             if (canAdmin(sender, PERM_TEST) || sender.hasPermission("matchbook.admin")) subs.add("test");
 
             return filterPrefix(subs, partial);
@@ -461,7 +461,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
             any = true;
         }
 
-        if (canAdmin(sender, PERM_STATSKEYS)) {
+        if (canAdmin(sender, PERM_STATSKEYS) || sender.hasPermission("matchbook.admin")) {
             sender.sendMessage(ChatColor.GRAY + " - /" + label + " statskeys [player]" + ChatColor.DARK_GRAY + "  (discover stat keys)");
             any = true;
         }
@@ -537,9 +537,9 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
             org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
                     sender.sendMessage(ChatColor.GREEN + "Uploaded: " + ChatColor.WHITE + url));
         } catch (Exception e) {
-            if (plugin.getMatchbookConfig().debugLogging()) {
-                plugin.getLogger().warning("Export upload failed: " + e.getMessage());
-            }
+            plugin.getLogger().warning("Export upload failed: " + e.getMessage());
+            org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
+                    sender.sendMessage(ChatColor.RED + "Hastebin upload failed: " + ChatColor.GRAY + e.getMessage()));
         }
     }
 

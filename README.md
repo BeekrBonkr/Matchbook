@@ -8,8 +8,8 @@ A Paper plugin that records persistent match history for [MBedwars](https://www.
 
 - **Match history** — every completed BedWars match is saved with per-player stats (kills, deaths, final kills, beds destroyed, wins, losses).
 - **Event log** — every join, leave, death, kill, bed break, and team elimination is recorded with timestamps. Viewable in the GUI and exportable to CSV.
-- **Placement tracking** — 1st, 2nd, 3rd place tracked per team and included in exports.
-- **Tie detection** — matches that end without a winner are correctly flagged as ties.
+- **Placement tracking** — 1st, 2nd, 3rd place tracked per team and included in exports. Teams tied for 1st get a dedicated tie stat instead of a false 1st-place credit.
+- **Tie detection** — matches that end without a winner are correctly flagged as ties, with the specific tied teams tracked and shown by color.
 - **In-game GUI** — paginated match list, detailed per-player stats, event timeline viewer.
 - **CSV export** — player stats and event log exported as separate CSV files.
 - **Hastebin upload** — optionally upload exported CSVs to any Hastebin-compatible server automatically. Files are always saved locally too.
@@ -31,7 +31,7 @@ A Paper plugin that records persistent match history for [MBedwars](https://www.
 
 ## Installation
 
-1. Drop `Matchbook-<version>.jar` into your `plugins/` folder.
+1. Drop `Matchbook-<version>.jar` into your `plugins/MBedwars/add-ons/` folder.
 2. Restart the server. Matchbook creates its config at:
    `plugins/MBedwars/add-ons/Matchbook/config.yml`
 3. Edit `config.yml` as needed (see [Configuration](#configuration)).
@@ -100,14 +100,15 @@ These are kept for backwards compatibility with older permission setups:
 ### Match History (`/mb matches`)
 
 - Shows all of your past matches, most recent first.
-- Each item is colored by outcome: **green** (won), **red** (lost), **yellow** (tied).
+- Each item shows the actual result: the winning team's color and name (e.g. **RED WIN**), or every tied team's color for a tie (e.g. **RED, BLUE TIE**). Your own team for that match is shown in the item tooltip.
 - Displays your stats for that match in the item tooltip.
 - Click any match to open Match Details.
 
 ### Match Details
 
-- Shows all participants sorted by winning team → final kills → kills.
-- Each player is shown as a wool block colored by their team.
+- Players are grouped by team (fixed color order), then sorted by final kills → kills within each team.
+- Each player is shown as a wool block colored by their team's actual bed color.
+- Row 1 holds the match summary; the player list starts on row 2.
 - **Spectators** are listed in the spyglass item (slot 47 in the nav bar).
 - **Event Log button** (slot 51) — click to open the full event timeline.
 - Prev/Next navigate between pages when there are many players.
@@ -230,6 +231,8 @@ export_upload:
    ```
 2. Set `storage.type: mysql` in `config.yml` with your credentials.
 3. Restart the server — tables are created automatically.
+
+> **TLS:** connections verify the server certificate by default. If your MySQL/MariaDB server uses a self-signed certificate, add `verifyServerCertificate=false` to `mysql.params` in `config.yml`.
 
 ### Migration
 

@@ -21,7 +21,9 @@ public final class MatchesDetailsGui implements Listener {
     private static final int ROWS = 6;
     private static final int SIZE = ROWS * 9;
 
-    private static final int PAGE_SLOTS = 45; // rows 0-4
+    private static final int HEADER_SLOT    = 4;
+    private static final int PLAYER_START_SLOT = 9; // row 1 is reserved for the header; players start on row 2
+    private static final int PAGE_SLOTS = 36; // rows 1-4
     private static final int SLOT_PREV      = 45;
     private static final int SLOT_BACK      = 49;
     private static final int SLOT_SPECTATORS = 47;
@@ -35,57 +37,73 @@ public final class MatchesDetailsGui implements Listener {
     }
 
     public void openDetails(Player viewer, String matchId, int page) {
-        YamlConfiguration yml = plugin.getRepo().loadMatchYaml(matchId);
-        if (yml == null) {
-            File matchFile = findMatchFileById(matchId);
-            if (matchFile != null) yml = YamlConfiguration.loadConfiguration(matchFile);
-        }
+        UUID viewerUuid = viewer.getUniqueId();
 
-        if (yml == null) {
-            Inventory inv = Bukkit.createInventory(new DetailsHolder(viewer.getUniqueId(), matchId, 0), SIZE,
-                    ChatColor.DARK_GRAY + "Match Details");
-            buildNavBar(inv, matchId, 0, 0);
-            inv.setItem(22, errorItem("Match not found", matchId));
-            viewer.openInventory(inv);
-            return;
-        }
+        // Repo reads (file/JDBC) can block for a while under MySQL storage; keep them off the main thread
+        // and only hop back to build/open the inventory once everything is ready.
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            YamlConfiguration yml = plugin.getRepo().loadMatchYaml(matchId);
+            if (yml == null) {
+                File matchFile = findMatchFileById(matchId);
+                if (matchFile != null) yml = YamlConfiguration.loadConfiguration(matchFile);
+            }
+            final YamlConfiguration ymlFinal = yml;
 
-        List<String> participants = yml.getStringList("match.participants");
-        final YamlConfiguration ymlFinal = yml;
-        participants.sort((a, b) -> comparePlayers(ymlFinal, a, b));
+            if (ymlFinal == null) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (!viewer.isOnline()) return;
+                    Inventory inv = Bukkit.createInventory(new DetailsHolder(viewerUuid, matchId, 0), SIZE,
+                            ChatColor.DARK_GRAY + "Match Details");
+                    buildNavBar(inv, null, 0, 0);
+                    inv.setItem(22, errorItem("Match not found", matchId));
+                    viewer.openInventory(inv);
+                });
+                return;
+            }
 
-        int maxPage = participants.isEmpty() ? 0 : Math.max(0, (participants.size() - 1) / PAGE_SLOTS);
-        int p = Math.max(0, Math.min(page, maxPage));
+            List<String> participants = ymlFinal.getStringList("match.participants");
+            participants.sort((a, b) -> comparePlayers(ymlFinal, a, b));
 
-        String title = ChatColor.DARK_GRAY + "Match Details "
-                + ChatColor.GRAY + "(" + matchId + ") "
-                + ChatColor.DARK_GRAY + "• "
-                + ChatColor.GRAY + (p + 1) + "/" + (maxPage + 1);
+            int maxPage = participants.isEmpty() ? 0 : Math.max(0, (participants.size() - 1) / PAGE_SLOTS);
+            int p = Math.max(0, Math.min(page, maxPage));
 
-        Inventory inv = Bukkit.createInventory(new DetailsHolder(viewer.getUniqueId(), matchId, p), SIZE, title);
+            int start = p * PAGE_SLOTS;
+            int end   = Math.min(participants.size(), start + PAGE_SLOTS);
+            List<ItemStack> playerItems = new ArrayList<>();
+            for (int i = start; i < end; i++) {
+                playerItems.add(buildPlayerItem(ymlFinal, participants.get(i), viewerUuid));
+            }
+            ItemStack header = buildHeaderItem(ymlFinal);
 
-        buildNavBar(inv, matchId, p, maxPage);
+            int maxPageFinal = maxPage;
+            int pFinal = p;
 
-        // Slot 4: match summary header
-        inv.setItem(4, buildHeaderItem(yml));
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!viewer.isOnline()) return;
 
-        int start = p * PAGE_SLOTS;
-        int end   = Math.min(participants.size(), start + PAGE_SLOTS);
-        int slot  = 0;
-        for (int i = start; i < end; i++) {
-            // Skip slot 4 (header) on the first page
-            if (slot == 4) slot++;
-            inv.setItem(slot++, buildPlayerItem(yml, participants.get(i), viewer.getUniqueId()));
-        }
+                String title = ChatColor.DARK_GRAY + "Match Details "
+                        + ChatColor.GRAY + "(" + matchId + ") "
+                        + ChatColor.DARK_GRAY + "• "
+                        + ChatColor.GRAY + (pFinal + 1) + "/" + (maxPageFinal + 1);
 
-        viewer.openInventory(inv);
+                Inventory inv = Bukkit.createInventory(new DetailsHolder(viewerUuid, matchId, pFinal), SIZE, title);
+
+                buildNavBar(inv, ymlFinal, pFinal, maxPageFinal);
+                inv.setItem(HEADER_SLOT, header);
+
+                int slot = PLAYER_START_SLOT;
+                for (ItemStack it : playerItems) inv.setItem(slot++, it);
+
+                viewer.openInventory(inv);
+            });
+        });
     }
 
     // -----------------------------------------------------------------------
     // Nav bar builder (shared across all pages)
     // -----------------------------------------------------------------------
 
-    private void buildNavBar(Inventory inv, String matchId, int page, int maxPage) {
+    private void buildNavBar(Inventory inv, YamlConfiguration yml, int page, int maxPage) {
         // Fill bottom row with gray panes
         for (int i = 45; i < 54; i++) inv.setItem(i, navPane());
 
@@ -97,7 +115,6 @@ public final class MatchesDetailsGui implements Listener {
                 page < maxPage ? ChatColor.GRAY + "Go to page " + (page + 2) : ChatColor.DARK_GRAY + "Already on last page"));
 
         // Spectators info (slot 47)
-        YamlConfiguration yml = plugin.getRepo().loadMatchYaml(matchId);
         inv.setItem(SLOT_SPECTATORS, buildSpectatorsItem(yml));
 
         // Event log button (slot 51)
@@ -194,13 +211,14 @@ public final class MatchesDetailsGui implements Listener {
         String base     = "players." + uuidStr;
         String username = yml.getString(base + ".username", uuidStr);
         String team     = yml.getString(base + ".team", "");
+        String dyeColor = yml.getString(base + ".team_color", null);
 
-        Material wool = teamWool(team);
+        Material wool = MatchesGui.teamWool(team, dyeColor);
         ItemStack it = new ItemStack(wool);
         ItemMeta meta = it.getItemMeta();
 
         boolean isYou = uuidStr.equalsIgnoreCase(viewerUuid.toString());
-        ChatColor tc  = MatchesGui.teamColor(team);
+        ChatColor tc  = MatchesGui.teamColor(team, dyeColor);
 
         meta.setDisplayName(
                 (isYou ? ChatColor.GOLD + "★ " : "")
@@ -390,40 +408,23 @@ public final class MatchesDetailsGui implements Listener {
         return sb.toString();
     }
 
-    private static Material teamWool(String team) {
-        if (team == null) return Material.WHITE_WOOL;
-        return switch (team.toUpperCase(Locale.ROOT)) {
-            case "RED"              -> Material.RED_WOOL;
-            case "BLUE"             -> Material.BLUE_WOOL;
-            case "GREEN", "LIME"    -> Material.LIME_WOOL;
-            case "YELLOW"           -> Material.YELLOW_WOOL;
-            case "PINK"             -> Material.PINK_WOOL;
-            case "AQUA", "CYAN"     -> Material.CYAN_WOOL;
-            case "WHITE"            -> Material.WHITE_WOOL;
-            case "GRAY", "GREY"     -> Material.GRAY_WOOL;
-            case "ORANGE"           -> Material.ORANGE_WOOL;
-            case "PURPLE"           -> Material.PURPLE_WOOL;
-            default                 -> Material.WHITE_WOOL;
-        };
+    // -----------------------------------------------------------------------
+    // Sorting — group players by team (fixed color order), then by performance within team.
+    // -----------------------------------------------------------------------
+
+    private static int teamOrderIndex(String team) {
+        if (team == null || team.isBlank()) return MatchesGui.FIXED_TEAM_ORDER.size();
+        int idx = MatchesGui.FIXED_TEAM_ORDER.indexOf(team.toUpperCase(Locale.ROOT));
+        return idx < 0 ? MatchesGui.FIXED_TEAM_ORDER.size() : idx;
     }
 
-    // -----------------------------------------------------------------------
-    // Sorting
-    // -----------------------------------------------------------------------
-
     private static int comparePlayers(YamlConfiguration yml, String a, String b) {
-        String result  = yml.getString("match.result", "");
-        String winTeam = "";
-        if (result != null && result.toUpperCase(Locale.ROOT).startsWith("WIN:")) {
-            winTeam = result.substring("WIN:".length()).trim();
-        }
-
         String teamA = yml.getString("players." + a + ".team", "");
         String teamB = yml.getString("players." + b + ".team", "");
 
-        boolean aWin = !winTeam.isBlank() && winTeam.equalsIgnoreCase(teamA);
-        boolean bWin = !winTeam.isBlank() && winTeam.equalsIgnoreCase(teamB);
-        if (aWin != bWin) return aWin ? -1 : 1;
+        int orderA = teamOrderIndex(teamA);
+        int orderB = teamOrderIndex(teamB);
+        if (orderA != orderB) return Integer.compare(orderA, orderB);
 
         long aFK = yml.getLong("players." + a + ".diff.bedwars:final_kills", 0L);
         long bFK = yml.getLong("players." + b + ".diff.bedwars:final_kills", 0L);

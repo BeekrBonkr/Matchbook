@@ -314,13 +314,17 @@ public final class MatchLifecycleService {
                     // Ensure critical counters are present even if snapshot sources missed them.
                     session.applyTriggerIncrementsToMatchStats(PERSIST_TRIGGER_KEYS);
 
-                    // Finalize placement keys into the per-player matchStats map.
+                    // Finalize placement keys (elimination order, ties-by-alive-teams, winner => 1st).
                     finalizePlacements(arena, session);
-                    session.applyPlacementsToMatchStats();
 
                     // If MBedwars didn't provide a winner (or we accidentally marked a tie),
-                    // infer from recorded per-match stats (bedwars:wins).
+                    // infer from recorded per-match stats (bedwars:wins). This can correct
+                    // finalizePlacements' tie-for-1st into a definitive win (or vice versa), so it
+                    // MUST run before placements are baked into matchStats below.
                     inferResultFromRecordedWinStats(session);
+
+                    // Now that placements are definitive, write matchbook:*_place / matchbook:ties.
+                    session.applyPlacementsToMatchStats();
 
                     // Compute the final match result AFTER tie detection/placement finalization.
                     String result = computeResult(session);
@@ -720,6 +724,19 @@ public final class MatchLifecycleService {
      * Flush all current sessions (e.g., on disable). This will only persist sessions with real match activity.
      */
     public void flushAll(String reason) {
+        flushAll(reason, false);
+    }
+
+    /**
+     * Flush all current sessions.
+     *
+     * @param sync When true, saves are performed synchronously on the calling thread instead of being
+     *             scheduled via the Bukkit scheduler. This MUST be used from onDisable(): Bukkit marks
+     *             the plugin as disabled before invoking onDisable(), so runTaskAsynchronously() throws
+     *             IllegalPluginAccessException immediately (outside any try/catch here), silently
+     *             dropping every remaining session in this batch.
+     */
+    public void flushAll(String reason, boolean sync) {
         if (reason != null) plugin.getLogger().warning("Matchbook: flushing matches due to " + reason);
         Map<String, MatchSession> copy = new LinkedHashMap<>(sessionsByArena);
         sessionsByArena.clear();
@@ -732,13 +749,21 @@ public final class MatchLifecycleService {
 
             if (!shouldPersist(session, doc)) continue;
 
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            if (sync) {
                 try {
                     plugin.getRepo().saveMatch(doc);
                 } catch (Exception e) {
                     plugin.getLogger().severe("Matchbook: failed to save match " + doc.matchId() + " : " + e.getMessage());
                 }
-            });
+            } else {
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    try {
+                        plugin.getRepo().saveMatch(doc);
+                    } catch (Exception e) {
+                        plugin.getLogger().severe("Matchbook: failed to save match " + doc.matchId() + " : " + e.getMessage());
+                    }
+                });
+            }
         }
     }
 

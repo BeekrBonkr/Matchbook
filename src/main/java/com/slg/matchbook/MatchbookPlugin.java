@@ -95,10 +95,25 @@ public final class MatchbookPlugin extends JavaPlugin {
         this.updateChecker = new UpdateChecker(this);
         this.updateChecker.start();
 
+        // Registered unconditionally (unlike MatchbookListener) so operators still get caught up
+        // on an available update even on a hub/lobby server, which never registers MatchbookListener.
+        Bukkit.getPluginManager().registerEvents(new org.bukkit.event.Listener() {
+            @org.bukkit.event.EventHandler
+            public void onJoin(org.bukkit.event.player.PlayerJoinEvent e) {
+                if (updateChecker != null) updateChecker.notifyIfOp(e.getPlayer());
+            }
+        }, this);
+
         BedwarsAPI.onReady(() -> {
-            this.lifecycle = new MatchLifecycleService(this);
-            this.listener = new MatchbookListener(this, lifecycle);
-            Bukkit.getPluginManager().registerEvents(listener, this);
+            boolean hubMode = config.hubMode();
+            if (hubMode) {
+                getLogger().info("Matchbook: Hub/lobby mode enabled — match recording is disabled. "
+                        + "This server will only read/export from storage.");
+            } else {
+                this.lifecycle = new MatchLifecycleService(this);
+                this.listener = new MatchbookListener(this, lifecycle);
+                Bukkit.getPluginManager().registerEvents(listener, this);
+            }
 
             // GUI
             this.detailsGui  = new MatchesDetailsGui(this);

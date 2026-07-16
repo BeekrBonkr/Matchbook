@@ -2,7 +2,7 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
-## [0.6.4] — 2026-07-16
+## [0.6.5] — 2026-07-16
 
 **Fixed: duplicate matches with an absurd running time.**
 - Root cause: a match that never received a proper round end (e.g. MBedwars left the arena stuck reporting `RUNNING` indefinitely) would sit in memory until the server restarted, at which point shutdown-time flushing saved it with its real start time but `endUnix` = the moment the server stopped — producing a bogus extra match record for that arena with an hours/days-long duration.
@@ -29,6 +29,17 @@ All notable changes to Matchbook over the past month, newest first.
 - Every setting in `config.yml` (including the ones added above) now has an explanatory comment, down to individual MySQL connection-pool keys.
 - `ConfigUpdater` previously only merged in missing keys when `config-version` changed, and even then it rebuilt the file from raw values — silently dropping every comment (including the top-of-file banner) because Bukkit's config merge doesn't carry comments across a plain `.set()`. Comments were effectively gone forever after the first version-triggered merge.
 - Fixed: the config is now synced against the packaged template on *every* startup (and on `/mb reload`), not just on a version bump. User-set values always win; comments (block, inline, and the top-of-file header) always come from the template, so wording fixes reach existing installs automatically and any config that already lost its comments gets them back. The file is only rewritten (and backed up) when something actually needed fixing.
+
+**Merge fixup with hub/lobby mode (0.6.3, below):** the update-check join notification was moved out of `MatchbookListener` (which only registers when hub mode is off) into an always-registered listener in `MatchbookPlugin`, so operators on a hub/lobby server still get caught up on an available update.
+
+## [0.6.3] — 2026-07-14
+
+**Hub/lobby mode:**
+- New `mode.hub` config option. When enabled, Matchbook registers no match-tracking listeners at all — it never creates a match session or writes a match to storage on that server. `/mb matches`, `/mb all`, `/mb view`, and `/mb export` keep working against the configured storage backend, so a hub server can browse/export a shared MySQL match history without ever attempting to record matches itself.
+- Takes effect on server start/restart, same as `storage.type`; not hot-reloadable via `/mb reload`.
+- Config version bumped to 0.0.10.
+
+**Docs:** README updated with a "Hub / Lobby Mode" section and cross-referenced from "Multi-Server / Proxy Networks".
 
 ## [0.6.2] — 2026-07-14
 

@@ -48,6 +48,15 @@ public final class MatchbookConfig {
     }
 
     /**
+     * Hub/lobby mode: Matchbook skips match tracking entirely (no listeners, no sessions,
+     * no writes) and only reads from the configured storage backend. Read at startup only;
+     * changing it requires a restart, not just /mb reload.
+     */
+    public boolean hubMode() {
+        return raw().getBoolean("mode.hub", false);
+    }
+
+    /**
      * Stat keys to snapshot from MBedwars. If empty, uses sensible defaults.
      */
     public List<String> trackedKeys() {

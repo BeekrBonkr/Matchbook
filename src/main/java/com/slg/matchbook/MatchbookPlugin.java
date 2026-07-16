@@ -7,7 +7,10 @@ import com.slg.matchbook.gui.EventLogGui;
 import com.slg.matchbook.gui.MatchesDetailsGui;
 import com.slg.matchbook.gui.MatchesGui;
 import com.slg.matchbook.placeholders.MatchbookExpansion;
+import com.slg.matchbook.storage.HealthCheckResult;
 import com.slg.matchbook.storage.MatchRepository;
+import com.slg.matchbook.storage.YamlMatchRepository;
+import com.slg.matchbook.storage.MySqlMatchRepository;
 import com.slg.matchbook.service.MatchLifecycleService;
 import com.slg.matchbook.service.UpdateChecker;
 import de.marcely.bedwars.api.BedwarsAPI;
@@ -24,7 +27,8 @@ public final class MatchbookPlugin extends JavaPlugin {
 
     private com.slg.matchbook.config.MatchbookConfig config;
     private volatile RuntimeSettings settings;
-    private MatchRepository repo;
+    private volatile MatchRepository repo;
+    private volatile boolean storageReconnecting = false;
 
     private MatchStorage storage;
     private MatchLifecycleService lifecycle;
@@ -57,11 +61,90 @@ public final class MatchbookPlugin extends JavaPlugin {
     }
 
     /**
-     * Reloads config and runtime settings. Safe to call from main thread.
+     * Reloads config and runtime settings, and — if the storage section actually changed — hot-swaps
+     * the storage backend without needing a server restart. Safe to call from the main thread.
+     *
+     * @return true if a storage config change was detected and a reconnect was triggered (the
+     *         reconnect itself runs asynchronously; check the console or {@code /mb test} shortly
+     *         after for the outcome).
      */
-    public void reloadMatchbook() {
+    public boolean reloadMatchbook() {
+        String oldStorageFingerprint = storageFingerprint();
+
         this.config.load();
         this.settings = config.runtimeSettings();
+
+        boolean storageChanged = !oldStorageFingerprint.equals(storageFingerprint());
+        if (storageChanged) reconnectStorage();
+        return storageChanged;
+    }
+
+    /** Cheap "did the storage config change" signal — not a real hash, just an equality check. */
+    private String storageFingerprint() {
+        var section = config.raw().getConfigurationSection("storage");
+        return section != null ? String.valueOf(section.getValues(true)) : "";
+    }
+
+    /**
+     * Builds and validates a brand-new storage backend off the main thread, and only swaps it in for
+     * {@link #repo} if it initializes AND passes a health check — a bad config change (typo'd MySQL
+     * credentials, unreachable host, etc.) can't take down a previously-working storage backend. The
+     * old backend is only shut down after the swap, once nothing can reference it anymore.
+     */
+    private void reconnectStorage() {
+        if (storageReconnecting) {
+            getLogger().warning("Matchbook: storage reconnect already in progress; ignoring duplicate trigger.");
+            return;
+        }
+        storageReconnecting = true;
+
+        StorageType newType = config.storageType();
+        getLogger().info("Matchbook: storage config changed — reconnecting (" + newType + ")...");
+
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            MatchRepository candidate = newType == StorageType.MYSQL
+                    ? new MySqlMatchRepository(this, config.raw())
+                    : new YamlMatchRepository(this);
+
+            String failure = null;
+            try {
+                candidate.init();
+                HealthCheckResult health = candidate.healthCheck();
+                if (!health.ok()) failure = health.message();
+            } catch (Exception e) {
+                failure = e.getMessage();
+            }
+
+            String finalFailure = failure;
+            Bukkit.getScheduler().runTask(this, () -> {
+                storageReconnecting = false;
+
+                if (finalFailure != null) {
+                    getLogger().severe("Matchbook: storage reconnect failed (" + newType + "): " + finalFailure
+                            + " — keeping the previous storage backend active. Fix config.yml and run /mb reload again.");
+                    try {
+                        candidate.shutdown();
+                    } catch (Exception e) {
+                        getLogger().warning("Matchbook: error cleaning up failed reconnect attempt: " + e.getMessage());
+                    }
+                    return;
+                }
+
+                MatchRepository old = this.repo;
+                this.repo = candidate;
+                getLogger().info("Matchbook: storage backend reconnected successfully (" + newType + ").");
+
+                if (old != null) {
+                    Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                        try {
+                            old.shutdown();
+                        } catch (Exception e) {
+                            getLogger().warning("Matchbook: error shutting down previous storage backend: " + e.getMessage());
+                        }
+                    });
+                }
+            });
+        });
     }
 
     public File getAddonDataFolder() {
@@ -76,18 +159,24 @@ public final class MatchbookPlugin extends JavaPlugin {
         }
 
         this.config = new com.slg.matchbook.config.MatchbookConfig(this);
-        reloadMatchbook();
+        this.config.load();
+        this.settings = config.runtimeSettings();
 
         StorageType type = config.storageType();
-        if (type == StorageType.MYSQL) this.repo = new com.slg.matchbook.storage.MySqlMatchRepository(this, config.raw());
-        else this.repo = new com.slg.matchbook.storage.YamlMatchRepository(this);
+        if (type == StorageType.MYSQL) this.repo = new MySqlMatchRepository(this, config.raw());
+        else this.repo = new YamlMatchRepository(this);
 
         try {
             this.repo.init();
         } catch (Exception e) {
             getLogger().severe("Matchbook: Storage init failed (" + type + "). Falling back to YAML. " + e.getMessage());
-            this.repo = new com.slg.matchbook.storage.YamlMatchRepository(this);
-            try { this.repo.init(); } catch (Exception ignored) {}
+            this.repo = new YamlMatchRepository(this);
+            try {
+                this.repo.init();
+            } catch (Exception e2) {
+                getLogger().severe("Matchbook: YAML fallback storage also failed to initialize: " + e2.getMessage()
+                        + " — Matchbook will not be able to save or read matches until this is fixed.");
+            }
         }
 
         this.storage = new MatchStorage(this);

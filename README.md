@@ -54,7 +54,7 @@ All commands use `/matchbook` or the alias `/mb`.
 | `/mb migrate yaml2mysql` | `mb.command.migrate` | Migrate all YAML match files into MySQL. |
 | `/mb migrate mysql2yaml` | `mb.command.migrate` | Migrate all MySQL records to YAML files. |
 | `/mb migrate ... --dry-run` | `mb.command.migrate` | Preview migration without writing anything. |
-| `/mb reload` | `mb.command.reload` | Reload `config.yml` without restarting. |
+| `/mb reload` | `mb.command.reload` | Reload `config.yml` without restarting — hot-swaps the storage backend too if `storage.*` changed. |
 | `/mb statskeys [player]` | `mb.command.statskeys` | List all stat keys available from MBedwars for a player. |
 | `/mb test` | `mb.command.test` | Run a storage health check. |
 
@@ -200,6 +200,10 @@ storage:
     password: "change_me"
     table_prefix: "matchbook_"
 ```
+
+Changing anything under `storage:` (including switching `type` between `yaml` and `mysql`) takes effect on `/mb reload` — no server restart needed. Matchbook builds and validates the new backend (connects, runs a health check) *before* switching over, so a typo'd password or unreachable host just fails the reload and logs why, leaving the previous backend running untouched. (`mode.hub` is the one exception — it still needs a restart, see [Hub / Lobby Mode](#hub--lobby-mode).)
+
+If a match ever can't be saved after a few retries (e.g. the database is briefly unreachable), Matchbook writes a local recovery copy to `matches/failed/<matchcode>.yml` instead of losing it — nothing to do at the time, just move/re-import that file once storage is healthy again.
 
 ### Tracked Stats
 

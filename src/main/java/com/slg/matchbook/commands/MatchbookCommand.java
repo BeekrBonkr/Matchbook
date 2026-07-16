@@ -264,8 +264,12 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                     deny(sender);
                     return true;
                 }
-                plugin.reloadMatchbook();
+                boolean storageChanged = plugin.reloadMatchbook();
                 sender.sendMessage(ChatColor.GREEN + "Matchbook config reloaded.");
+                if (storageChanged) {
+                    sender.sendMessage(ChatColor.YELLOW + "Storage settings changed — reconnecting in the background "
+                            + "(no restart needed). Check console or run /" + label + " test in a few seconds to confirm.");
+                }
                 if (plugin.getSettings() != null) {
                     sender.sendMessage(ChatColor.GRAY + "Tracked keys: " + ChatColor.WHITE + String.join(", ", plugin.getSettings().trackedKeys()));
                 }

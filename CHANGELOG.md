@@ -2,6 +2,22 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.6.6] — 2026-07-16
+
+**Hot-reloadable storage — no more restarting to change the database.**
+- `/mb reload` now detects changes anywhere under `storage:` (switching `yaml`/`mysql`, MySQL host/port/credentials, pool settings, table prefix, ...) and reconnects the storage backend in the background, without a server restart.
+- The new backend is built and validated (connected + health-checked) *before* it replaces the active one — a bad config change (typo'd password, unreachable host) fails the reload with a clear log message and leaves the previously-working backend untouched, instead of breaking storage until someone notices and restarts.
+- The old backend is only shut down after the swap completes, so in-flight reads/writes are never disrupted mid-request.
+- (`mode.hub` still requires a restart — it changes which event listeners get registered, not the storage backend.)
+
+**Safer match persistence — no more silently losing a match to a DB hiccup.**
+- Every match save (normal finish, aborted/forced-end, and shutdown flush) now retries up to 3 times before giving up, refetching the current storage backend on each attempt — so a save started during a brief outage can succeed on retry, including right after an admin fixes the config with `/mb reload`.
+- If every retry still fails, Matchbook writes a local recovery copy to `matches/failed/<matchcode>.yml` instead of just logging an error and losing the data. Nothing to do at the time; move/re-import that file once storage is healthy again.
+
+**Other error-handling fixes:**
+- Fixed a silent failure at startup: if both the configured storage backend *and* its YAML fallback failed to initialize, this was previously swallowed with zero indication in the log — Matchbook would just silently be unable to save or read anything. Now logged clearly.
+- Fixed a HikariCP connection-pool leak in `MySqlMatchRepository`: calling `init()` a second time on the same instance used to leave the previous connection pool open instead of closing it first.
+
 ## [0.6.5] — 2026-07-16
 
 **Fixed: duplicate matches with an absurd running time.**

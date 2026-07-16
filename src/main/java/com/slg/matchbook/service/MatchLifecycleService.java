@@ -3,6 +3,7 @@ package com.slg.matchbook.service;
 import com.slg.matchbook.MatchSession;
 import com.slg.matchbook.MatchbookPlugin;
 import com.slg.matchbook.StatSnapshot;
+import com.slg.matchbook.io.MatchYamlCodec;
 import com.slg.matchbook.model.MatchDocument;
 import com.slg.matchbook.model.MatchEvent;
 import com.slg.matchbook.util.MatchIdUtil;
@@ -19,6 +20,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.scheduler.BukkitRunnable;
 
+import java.io.File;
 import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -830,27 +832,94 @@ public final class MatchLifecycleService {
 
             if (!shouldPersist(session, doc)) continue;
 
-            if (sync) {
-                try {
-                    plugin.getRepo().saveMatch(doc);
-                } catch (Exception e) {
-                    plugin.getLogger().severe("Matchbook: failed to save match " + doc.matchId() + " : " + e.getMessage());
-                }
-            } else {
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    try {
-                        plugin.getRepo().saveMatch(doc);
-                    } catch (Exception e) {
-                        plugin.getLogger().severe("Matchbook: failed to save match " + doc.matchId() + " : " + e.getMessage());
-                    }
-                });
-            }
+            persistMatch(doc, sync);
         }
     }
 
     // -----------------
     // Internals
     // -----------------
+
+    /**
+     * Persistence retry budget. Fetching {@code plugin.getRepo()} fresh on every attempt means a
+     * retry can succeed even if the earlier failure was a bad storage config that an admin just
+     * fixed with {@code /mb reload} — no restart needed either way.
+     */
+    private static final int SAVE_MAX_ATTEMPTS = 3;
+    private static final long SAVE_RETRY_DELAY_TICKS = 40L; // 2s, only used on the async path
+
+    /**
+     * Saves a match with a bounded retry, and — only if every attempt fails — writes a local YAML
+     * recovery copy under matches/failed/ so a transient storage outage (DB down, bad credentials,
+     * disk hiccup) can never silently lose a match's data. Never throws.
+     *
+     * @param sync Must be true only from onDisable(): the scheduler refuses new async/delayed tasks
+     *             once the plugin is marked disabled, so this path retries synchronously and inline
+     *             instead of scheduling delayed attempts.
+     */
+    private void persistMatch(MatchDocument doc, boolean sync) {
+        if (sync) {
+            for (int attempt = 1; attempt <= SAVE_MAX_ATTEMPTS; attempt++) {
+                try {
+                    plugin.getRepo().saveMatch(doc);
+                    return;
+                } catch (Exception e) {
+                    plugin.getLogger().warning("Matchbook: save attempt " + attempt + "/" + SAVE_MAX_ATTEMPTS
+                            + " failed for match " + doc.matchId() + ": " + e.getMessage());
+                    if (attempt < SAVE_MAX_ATTEMPTS) {
+                        try {
+                            Thread.sleep(300L);
+                        } catch (InterruptedException ignored) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+                }
+            }
+            writeRecoveryCopy(doc);
+        } else {
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> attemptSaveAsync(doc, 1));
+        }
+    }
+
+    private void attemptSaveAsync(MatchDocument doc, int attempt) {
+        try {
+            plugin.getRepo().saveMatch(doc);
+            return;
+        } catch (Exception e) {
+            plugin.getLogger().warning("Matchbook: save attempt " + attempt + "/" + SAVE_MAX_ATTEMPTS
+                    + " failed for match " + doc.matchId() + ": " + e.getMessage());
+        }
+
+        if (attempt >= SAVE_MAX_ATTEMPTS) {
+            writeRecoveryCopy(doc);
+            return;
+        }
+
+        Bukkit.getScheduler().runTaskLaterAsynchronously(plugin,
+                () -> attemptSaveAsync(doc, attempt + 1), SAVE_RETRY_DELAY_TICKS);
+    }
+
+    /** Last-resort safety net so a persistent storage outage never means lost match data. */
+    private void writeRecoveryCopy(MatchDocument doc) {
+        plugin.getLogger().severe("Matchbook: giving up saving match " + doc.matchId()
+                + " to the configured storage backend after " + SAVE_MAX_ATTEMPTS
+                + " attempts. Writing a local recovery copy instead.");
+        try {
+            File dir = new File(plugin.getAddonDataFolder(), "matches" + File.separator + "failed");
+            if (!dir.exists() && !dir.mkdirs()) {
+                throw new java.io.IOException("could not create recovery folder " + dir.getAbsolutePath());
+            }
+            File out = new File(dir, doc.matchId() + ".yml");
+            MatchYamlCodec.toYaml(doc).save(out);
+            plugin.getLogger().severe("Matchbook: recovery copy written to " + out.getAbsolutePath()
+                    + " — once storage is healthy again (see /mb test), this match can be recovered manually "
+                    + "from that file.");
+        } catch (Exception e) {
+            plugin.getLogger().severe("Matchbook: FAILED to write a local recovery copy for match "
+                    + doc.matchId() + ": " + e.getMessage() + " — this match's data is lost.");
+        }
+    }
 
     private void finishMatch(Arena arena, MatchSession session, String result) {
         session.addEvent(MatchEvent.matchEnd(now()));
@@ -871,13 +940,7 @@ public final class MatchLifecycleService {
             return;
         }
 
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            try {
-                plugin.getRepo().saveMatch(doc);
-            } catch (Exception e) {
-                plugin.getLogger().severe("Matchbook: failed to save match " + doc.matchId() + " : " + e.getMessage());
-            }
-        });
+        persistMatch(doc, false);
     }
 
     private boolean shouldPersist(MatchSession session, MatchDocument doc) {
@@ -1214,13 +1277,7 @@ public final class MatchLifecycleService {
                         MatchDocument doc = MatchDocument.fromSession(current, "ABORTED");
                         if (!shouldPersist(current, doc)) return;
 
-                        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                            try {
-                                plugin.getRepo().saveMatch(doc);
-                            } catch (Exception e) {
-                                plugin.getLogger().severe("Matchbook: failed to save aborted match " + doc.matchId() + " : " + e.getMessage());
-                            }
-                        });
+                        persistMatch(doc, false);
                     });
 
                     sessionsByArena.remove(arena.getName());

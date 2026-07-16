@@ -46,6 +46,15 @@ public final class MySqlMatchRepository implements MatchRepository {
      *                     migration dry-runs, which must not mutate the database while only previewing.
      */
     public void init(boolean ensureSchema) throws Exception {
+        // Guard against leaking a connection pool if init() is ever called twice on the same instance.
+        if (ds != null) {
+            try {
+                ds.close();
+            } catch (Throwable ignored) {
+            }
+            ds = null;
+        }
+
         this.prefix = s("mysql.table_prefix", "storage.mysql.table_prefix", "matchbook_");
 
         String host = s("mysql.host", "storage.mysql.host", "127.0.0.1");

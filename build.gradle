@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.slg"
-version = "0.6.6"
+version = "0.6.7"
 
 java {
     toolchain {
@@ -35,6 +35,20 @@ shadowJar {
     archiveClassifier.set("")
     // Keep dependencies inside one jar for admin UX.
     // (Relocation is optional; leave it off to reduce surprises with JDBC SPI.)
+}
+
+// The plain `jar` task doesn't include HikariCP/mysql-connector-j (they're `implementation`
+// deps, only bundled by shadowJar), so it produces a plugin jar that throws
+// NoClassDefFoundError on MySQL storage the moment it's dropped on a server. Both tasks write
+// to the same build/libs/Matchbook-<version>.jar filename (shadowJar's classifier is set to ""
+// above), so leaving `jar` enabled is a race that can silently overwrite the working shaded jar
+// with the broken thin one. Disable it outright and make `assemble`/`build` produce only the
+// shaded jar.
+tasks.named("jar") {
+    enabled = false
+}
+tasks.named("assemble") {
+    dependsOn(tasks.named("shadowJar"))
 }
 
 // Convenience alias: some admins type `shadowjar` (lowercase).

@@ -2,6 +2,13 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.6.7] — 2026-07-16
+
+**Critical build fix: 0.6.6 crashed on MySQL storage with `NoClassDefFoundError: com/zaxxer/hikari/HikariConfig`.**
+- Root cause: `build.gradle`'s shadow-jar config had the shaded (fat) jar and the plain `jar` task writing to the same output filename, and `./gradlew build`/`assemble` only ran the plain `jar` task — which excludes `implementation` dependencies (HikariCP, the MySQL driver). Any jar built with the standard `build` command was missing both, so `MySqlMatchRepository.init()` failed immediately on `HikariConfig`, and Matchbook failed to enable entirely on any server using `storage.type: mysql`.
+- Fixed by disabling the plain `jar` task and wiring `assemble`/`build` to always produce the shaded jar instead. `./gradlew build` (or `shadowJar`) now always produces a complete, correct jar — confirmed by inspecting the built artifact for `HikariConfig.class` and the MySQL driver.
+- No plugin behavior changed in this release — same code as 0.6.6, just a build/packaging fix. If you're running 0.6.6 with MySQL storage, upgrade to 0.6.7.
+
 ## [0.6.6] — 2026-07-16
 
 **Hot-reloadable storage — no more restarting to change the database.**

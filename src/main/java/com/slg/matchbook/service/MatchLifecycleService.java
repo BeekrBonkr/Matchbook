@@ -881,9 +881,35 @@ public final class MatchLifecycleService {
     }
 
     private boolean shouldPersist(MatchSession session, MatchDocument doc) {
+        // Never persist a match whose recorded duration exceeds the sane maximum — this is the
+        // shutdown-time safety net for the watchdog's proactive check in startAbortWatchdog(). A
+        // session that never received a real RoundEnd and lingers until the server restarts would
+        // otherwise be saved with startUnix from hours/days earlier and endUnix = shutdown time,
+        // producing a bogus "duplicate-looking" match with an absurd running time.
+        if (exceedsMaxDuration(doc)) {
+            plugin.getLogger().warning("Matchbook: discarding match " + (doc != null ? doc.matchId() : "?")
+                    + " (arena=" + (doc != null ? doc.arenaName() : "?") + ") — its recorded duration exceeds "
+                    + "match.max_duration_minutes. This usually means the match never received a proper end "
+                    + "(e.g. it was still lingering when the server restarted) and is not a real match.");
+            return false;
+        }
+
         // Prefer event-driven signal, but fall back to inspecting the document.
         if (session != null && session.hasTriggerActivity()) return true;
         return hasAnyNonZeroDiffForKeys(doc, PERSIST_TRIGGER_KEYS);
+    }
+
+    /** Config-driven ceiling on match duration. 0 (or unset) means no limit. */
+    private long maxDurationMinutes() {
+        return plugin.getMatchbookConfig().raw().getLong("match.max_duration_minutes", 180L);
+    }
+
+    private boolean exceedsMaxDuration(MatchDocument doc) {
+        if (doc == null) return false;
+        long maxMinutes = maxDurationMinutes();
+        if (maxMinutes <= 0L) return false;
+        long durationSeconds = doc.endUnix() - doc.startUnix();
+        return durationSeconds > maxMinutes * 60L;
     }
 
     private boolean hasAnyNonZeroDiffForKeys(MatchDocument doc, Set<String> keys) {
@@ -1146,6 +1172,30 @@ public final class MatchLifecycleService {
                 if (current == null || current != session) {
                     cancel();
                     return;
+                }
+
+                // Proactively kill matches that have been running (without a real RoundEnd) for
+                // longer than makes sense — regardless of what arena.getStatus() reports. This is
+                // the actual fix for the "duplicate match with an absurd running time" bug: a match
+                // that never gets a RoundEnd (e.g. MBedwars leaves the arena stuck reporting RUNNING
+                // forever) used to just sit in sessionsByArena until the server restarted, at which
+                // point onDisable()'s flushAll() would save it with startUnix from hours/days earlier
+                // and endUnix = shutdown time. Catching it here means it's discarded outright and
+                // never reaches persistence at all.
+                if (current.endUnix == null) {
+                    long maxMinutes = maxDurationMinutes();
+                    if (maxMinutes > 0L) {
+                        long elapsedMinutes = (System.currentTimeMillis() / 1000L - current.startUnix) / 60L;
+                        if (elapsedMinutes > maxMinutes) {
+                            cancel();
+                            plugin.getLogger().warning("Matchbook: discarding stuck match on arena=" + arena.getName()
+                                    + " (matchId=" + current.matchId + ") — running " + elapsedMinutes
+                                    + "m without a round end, which exceeds match.max_duration_minutes ("
+                                    + maxMinutes + "). Not saving; this match is considered broken.");
+                            sessionsByArena.remove(arena.getName());
+                            return;
+                        }
+                    }
                 }
 
                 ArenaStatus status = arena.getStatus();

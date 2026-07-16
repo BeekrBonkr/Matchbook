@@ -190,8 +190,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                                 }
                             });
 
-                            // Optional upload to Hastebin (non-fatal if it fails)
-                            maybeUploadToHastebin(sender, finalOutFile);
+                            // Hastebin upload is temporarily disabled — see maybeUploadToHastebin() below.
                         } else {
                             outFile = exporter.exportMatchesCombinedToCsv(matchCodes);
                             File combinedEvents = exporter.exportCombinedEventsToCsv(matchCodes);
@@ -206,8 +205,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                                 }
                             });
 
-                            // Optional upload to Hastebin (non-fatal if it fails)
-                            maybeUploadToHastebin(sender, finalOutFile1);
+                            // Hastebin upload is temporarily disabled — see maybeUploadToHastebin() below.
                         }
                     } catch (Exception e) {
                         org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
@@ -280,34 +278,16 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                     return true;
                 }
 
-                boolean testUpload = false;
-                for (String a : args) {
-                    if (a.equalsIgnoreCase("--upload") || a.equalsIgnoreCase("--hastebin") || a.equalsIgnoreCase("-u")) {
-                        testUpload = true;
-                        break;
-                    }
-                }
-
+                // Hastebin upload testing is temporarily disabled — see maybeUploadToHastebin()/
+                // testHastebinConnection() below, which are left in place for when it comes back.
                 sender.sendMessage(ChatColor.GRAY + "Running connection tests... (this runs async)");
 
-                boolean finalTestUpload = testUpload;
                 org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                     var repoResult = plugin.getRepo().healthCheck();
-                    var uploadResult = finalTestUpload ? testHastebinConnection() : null;
 
                     org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
                         sender.sendMessage(ChatColor.YELLOW + "Matchbook health checks:");
                         sender.sendMessage(colorizeResult("Storage", repoResult.ok(), repoResult.message()));
-
-                        if (finalTestUpload) {
-                            if (uploadResult == null) {
-                                sender.sendMessage(colorizeResult("Hastebin", false, "Upload test failed: unknown error"));
-                            } else {
-                                sender.sendMessage(colorizeResult("Hastebin", uploadResult.ok, uploadResult.message));
-                            }
-                        } else {
-                            sender.sendMessage(ChatColor.DARK_GRAY + "Hastebin: (skipped) use --upload to test");
-                        }
                     });
                 });
 
@@ -396,10 +376,6 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                 return filterPrefix(List.of("yaml2mysql", "mysql2yaml", "--dry-run"), partial);
             }
 
-            if (sub.equals("test")) {
-                return filterPrefix(List.of("--upload"), partial);
-            }
-
             if (sub.equals("statskeys")) {
                 // Suggest online player names
                 List<String> names = new ArrayList<>();
@@ -407,27 +383,66 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                 return filterPrefix(names, partial);
             }
 
-            if (sub.equals("view") || sub.equals("export")) {
-                // Suggest recent matches; if player, prioritize their own history.
-                List<String> ids = new ArrayList<>();
-                try {
-                    if (sender instanceof Player p) {
-                        ids.addAll(plugin.getRepo().listMatchIdsForPlayer(p.getUniqueId()));
-                    }
-                    if (ids.isEmpty()) {
-                        ids.addAll(plugin.getRepo().listAllMatchIds());
-                    }
-                } catch (Exception ignored) {}
-
-                // cap suggestions (tab complete should be light)
-                if (ids.size() > 50) ids = ids.subList(0, 50);
-
-                // export supports comma-separated lists; don't try to be clever—just suggest raw ids
-                return filterPrefix(ids, partial);
+            if (sub.equals("view")) {
+                return filterPrefix(candidateMatchIds(sender), partial);
             }
         }
 
+        // export takes a comma-separated list of match codes and keeps accepting more after the
+        // first one — whether typed as "ID1,ID2" (still args[1], no space) or "ID1, ID2" (a new
+        // arg once a space follows the comma).
+        if (args.length >= 2 && args[0].equalsIgnoreCase("export")) {
+            return completeMatchCodeList(sender, args[args.length - 1]);
+        }
+
         return List.of();
+    }
+
+    /** Recent match ids; prioritizes the sender's own history when they're a player. */
+    private List<String> candidateMatchIds(CommandSender sender) {
+        List<String> ids = new ArrayList<>();
+        try {
+            if (sender instanceof Player p) {
+                ids.addAll(plugin.getRepo().listMatchIdsForPlayer(p.getUniqueId()));
+            }
+            if (ids.isEmpty()) {
+                ids.addAll(plugin.getRepo().listAllMatchIds());
+            }
+        } catch (Exception ignored) {}
+
+        // cap suggestions (tab complete should be light)
+        if (ids.size() > 50) ids = ids.subList(0, 50);
+        return ids;
+    }
+
+    /**
+     * Completes the LAST match code in a comma-separated list, e.g. typing "ABCD-1234,EF" only
+     * completes the "EF" segment, and the suggestion is re-prefixed with "ABCD-1234," so the whole
+     * token stays valid. Codes already present earlier in the list aren't suggested again.
+     */
+    private List<String> completeMatchCodeList(CommandSender sender, String currentArg) {
+        if (currentArg == null) currentArg = "";
+
+        int lastComma = currentArg.lastIndexOf(',');
+        String prefix = lastComma >= 0 ? currentArg.substring(0, lastComma + 1) : "";
+        String segment = lastComma >= 0 ? currentArg.substring(lastComma + 1) : currentArg;
+
+        Set<String> alreadyUsed = new HashSet<>();
+        if (lastComma >= 0) {
+            for (String code : prefix.split(",")) {
+                String c = code.trim();
+                if (!c.isEmpty()) alreadyUsed.add(c.toUpperCase(Locale.ROOT));
+            }
+        }
+
+        List<String> matches = filterPrefix(candidateMatchIds(sender), segment.toLowerCase(Locale.ROOT));
+
+        List<String> out = new ArrayList<>();
+        for (String id : matches) {
+            if (alreadyUsed.contains(id.toUpperCase(Locale.ROOT))) continue;
+            out.add(prefix + id);
+        }
+        return out;
     }
 
     private void sendHelp(CommandSender sender, String label) {
@@ -467,7 +482,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
         }
 
         if (canAdmin(sender, PERM_TEST) || sender.hasPermission("matchbook.admin")) {
-            sender.sendMessage(ChatColor.GRAY + " - /" + label + " test [--upload]" + ChatColor.DARK_GRAY + "  (test storage / hastebin upload)");
+            sender.sendMessage(ChatColor.GRAY + " - /" + label + " test" + ChatColor.DARK_GRAY + "  (test storage connection)");
             any = true;
         }
 

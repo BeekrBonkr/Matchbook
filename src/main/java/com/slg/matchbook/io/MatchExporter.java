@@ -178,9 +178,9 @@ public final class MatchExporter {
     private List<String> resolveColumnsWithPlacements(List<YamlConfiguration> matchYmls) {
         List<String> base = new ArrayList<>(resolveColumns());
 
-        // Discover matchbook-generated keys (placements + ties) across all matches being exported.
+        // Discover matchbook-generated placement keys (e.g. matchbook:1st_place) across all matches
+        // being exported. Ranks vary by match size so these can't be fixed ahead of time.
         Set<String> placementKeys = new HashSet<>();
-        boolean hasTies = false;
         if (matchYmls != null) {
             for (YamlConfiguration yml : matchYmls) {
                 if (yml == null) continue;
@@ -188,15 +188,11 @@ public final class MatchExporter {
                     var sec = yml.getConfigurationSection("players." + uuidStr + ".diff");
                     if (sec == null) continue;
                     for (String k : sec.getKeys(false)) {
-                        if (k == null) continue;
-                        if (k.startsWith("matchbook:") && k.endsWith("_place")) placementKeys.add(k);
-                        if (k.equals("matchbook:ties")) hasTies = true;
+                        if (k != null && k.startsWith("matchbook:") && k.endsWith("_place")) placementKeys.add(k);
                     }
                 }
             }
         }
-
-        if (placementKeys.isEmpty() && !hasTies) return base;
 
         // Sort placement keys by numeric rank (1st,2nd,3rd,4th...)
         List<String> sorted = new ArrayList<>(placementKeys);
@@ -215,7 +211,12 @@ public final class MatchExporter {
         for (String k : sorted) {
             if (!base.contains(k)) base.add(insertAt++, k);
         }
-        if (hasTies && !base.contains("matchbook:ties")) base.add(insertAt, "matchbook:ties");
+
+        // matchbook:ties is always included — even for exports where no match tied — so that
+        // CSVs from different matches line up on the same columns when combined in a spreadsheet.
+        // Missing values read back as 0 (see rowForColumns), which is exactly "not a tie".
+        if (!base.contains("matchbook:ties")) base.add(insertAt, "matchbook:ties");
+
         return base;
     }
 

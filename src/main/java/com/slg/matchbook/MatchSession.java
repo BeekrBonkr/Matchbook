@@ -341,8 +341,15 @@ public Set<UUID> getParticipants() {
         frozenTotalTeams = Math.max(frozenTotalTeams, participatingTeams.size());
     }
 
+    /**
+     * Placement denominator: the number of teams actually playing when the round started, never
+     * the arena's full configured team roster (which may include unused/empty slots) and never
+     * inflated by teams that only pick up a player LATER (e.g. an admin reassignment/auto-balance
+     * after round start). Once frozen, this is fixed for the rest of the match — a team gaining a
+     * player post-round-start must not change what place earlier eliminations are worth.
+     */
     public int totalTeams() {
-        return Math.max(frozenTotalTeams, participatingTeams.size());
+        return frozenTotalTeams > 0 ? frozenTotalTeams : participatingTeams.size();
     }
 
     // ---------------------------------------------------------------------------

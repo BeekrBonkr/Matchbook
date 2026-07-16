@@ -1,6 +1,6 @@
 # ============================================================
 #  Matchbook Configuration
-#  Plugin version: 0.6.2  |  Config version: 0.0.9
+#  Plugin version: 0.6.4  |  Config version: 0.1.0
 #
 #  When you update the plugin, Matchbook will automatically:
 #    1. Back up your current config  (config.yml.bak-<version>-<date>)
@@ -11,7 +11,7 @@
 # ============================================================
 
 # Internal config schema version — do not change this.
-config-version: "0.0.9"
+config-version: "0.1.0"
 
 # ============================================================
 #  Storage
@@ -26,9 +26,17 @@ storage:
 
   # MySQL settings — only used when type is set to "mysql".
   mysql:
+    # Hostname or IP address of the MySQL/MariaDB server.
     host: "127.0.0.1"
+
+    # Port the MySQL/MariaDB server is listening on.
     port: 3306
+
+    # Database name. Matchbook creates its tables in here on first connect;
+    # the database itself must already exist (see README's MySQL Setup section).
     database: "matchbook"
+
+    # Credentials for the account above. This account needs privileges on the database only.
     username: "matchbook"
     password: "change_me"
 
@@ -45,10 +53,19 @@ storage:
     # These defaults are fine for most servers; raise maximum_pool_size
     # if you have high concurrency (many simultaneous match saves).
     pool:
+      # Maximum number of simultaneous database connections Matchbook will open.
       maximum_pool_size: 10
+
+      # Minimum number of idle connections HikariCP keeps ready to avoid connection-open latency.
       minimum_idle: 2
+
+      # How long (in milliseconds) to wait for a connection to become available before giving up.
       connection_timeout_ms: 10000
+
+      # How long (in milliseconds) an idle connection above minimum_idle may sit before being closed.
       idle_timeout_ms: 300000
+
+      # Maximum lifetime (in milliseconds) of a connection before HikariCP retires and replaces it.
       max_lifetime_ms: 1800000
 
 # ============================================================
@@ -80,6 +97,14 @@ match:
   # How long (in ticks) to wait for individual player stat callbacks before
   # marking the snapshot as timed-out and continuing without that player.
   snapshot_timeout_ticks: 40
+
+  # Maximum sane match duration, in minutes. Matchbook watches every in-progress match and
+  # discards (never saves) any match that runs longer than this without a proper round end —
+  # this is what protects against the "duplicate match with an absurd running time" bug, which
+  # happened when a stuck match (never received a real RoundEnd) lingered until the server
+  # restarted and got saved with a start time from hours/days earlier.
+  # Set to 0 to disable this safeguard entirely (not recommended).
+  max_duration_minutes: 180
 
   # Stat keys to snapshot from MBedwars at match start and end.
   # The diff (end - start) is what gets saved in each match file.
@@ -139,6 +164,17 @@ placeholder:
   # so this prevents %matchbook_matchcode% from going blank too early.
   # Minimum: 5. Recommended: 30–120.
   grace_seconds: 60
+
+# ============================================================
+#  Update checks
+# ============================================================
+update_check:
+  # Check GitHub for new Matchbook releases and alert operators (OP players) in chat when one is
+  # available (also logged to console). Set to false to turn this off entirely.
+  enabled: true
+
+  # How often (in hours) to re-check for a new release after the initial check on startup.
+  interval_hours: 12
 
 # ============================================================
 #  Logging

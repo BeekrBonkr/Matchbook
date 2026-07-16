@@ -9,6 +9,7 @@ import com.slg.matchbook.gui.MatchesGui;
 import com.slg.matchbook.placeholders.MatchbookExpansion;
 import com.slg.matchbook.storage.MatchRepository;
 import com.slg.matchbook.service.MatchLifecycleService;
+import com.slg.matchbook.service.UpdateChecker;
 import de.marcely.bedwars.api.BedwarsAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -31,6 +32,9 @@ public final class MatchbookPlugin extends JavaPlugin {
     private MatchesDetailsGui detailsGui;
     private MatchesGui matchesGui;
     private EventLogGui eventLogGui;
+    private UpdateChecker updateChecker;
+
+    public UpdateChecker getUpdateChecker() { return updateChecker; }
 
     public MatchesGui getMatchesGui()       { return matchesGui;   }
     public MatchesDetailsGui getDetailsGui(){ return detailsGui;   }
@@ -87,6 +91,9 @@ public final class MatchbookPlugin extends JavaPlugin {
         }
 
         this.storage = new MatchStorage(this);
+
+        this.updateChecker = new UpdateChecker(this);
+        this.updateChecker.start();
 
         BedwarsAPI.onReady(() -> {
             this.lifecycle = new MatchLifecycleService(this);

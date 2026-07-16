@@ -1,6 +1,6 @@
 name: Matchbook
 main: com.slg.matchbook.MatchbookPlugin
-version: 0.6.2
+version: 0.6.4
 api-version: "1.21"
 depend: [MBedwars]
 softdepend: [PlaceholderAPI]
@@ -70,7 +70,7 @@ permissions:
     default: false
 
   mb.command.test:
-    description: "/mb test [--pastebin]"
+    description: "/mb test"
     default: false
 
   # Legacy nodes (kept for backwards compatibility)

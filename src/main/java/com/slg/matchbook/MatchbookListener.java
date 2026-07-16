@@ -23,6 +23,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 
 /**
  * Bridges MBedwars events to the lifecycle service.
@@ -35,6 +36,12 @@ public final class MatchbookListener implements Listener {
     public MatchbookListener(MatchbookPlugin plugin, MatchLifecycleService lifecycle) {
         this.plugin = plugin;
         this.lifecycle = lifecycle;
+    }
+
+    /** Catches up an operator who logs in after Matchbook already found an available update. */
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent e) {
+        if (plugin.getUpdateChecker() != null) plugin.getUpdateChecker().notifyIfOp(e.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

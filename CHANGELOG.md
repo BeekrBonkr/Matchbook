@@ -2,6 +2,34 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.6.4] — 2026-07-16
+
+**Fixed: duplicate matches with an absurd running time.**
+- Root cause: a match that never received a proper round end (e.g. MBedwars left the arena stuck reporting `RUNNING` indefinitely) would sit in memory until the server restarted, at which point shutdown-time flushing saved it with its real start time but `endUnix` = the moment the server stopped — producing a bogus extra match record for that arena with an hours/days-long duration.
+- The per-match watchdog now proactively discards (never saves) any in-progress match that exceeds `match.max_duration_minutes` (default 180), independent of what the arena's reported status says. A shutdown-time check backstops this in case a match somehow slips past the watchdog.
+
+**Ties now always exported as a column.**
+- `/mb export` and combined exports now always include a `matchbook:ties` (`ties`) column, even when none of the exported matches ended in a tie — it simply reads back as `0`. Previously the column only appeared when at least one exported match had a tie, which made combining CSVs from multiple exports in a spreadsheet misaligned.
+- Confirmed existing behavior is correct and unchanged: when a match ties, `bedwars:wins` is forced to `0` for the tied teams so a tie is never also counted as a win.
+
+**Update checks.**
+- Matchbook now checks GitHub Releases ([`BeekrBonkr/Matchbook-Releases`](https://github.com/BeekrBonkr/Matchbook-Releases)) for a newer version on startup and periodically thereafter (`update_check.interval_hours`, default 12h), and alerts online OPs in chat (plus a console log line) when one is found. New operators logging in later are also caught up.
+- New config: `update_check.enabled` (default `true`) turns the whole feature off.
+
+**Export autocomplete.**
+- `/mb export <id1>,<id2>,...` tab-completion now keeps suggesting match ids after the first one, whether typed as `id1,id2` (no space) or `id1, id2` (space after the comma) — previously it only completed the very first id.
+
+**Placement denominator fix.**
+- `MatchSession.totalTeams()` could inflate above the round-start team count if a team picked up a player *after* the round started (e.g. an admin reassignment/auto-balance), which would silently shift the placement of every team eliminated after that point. Placement is now always computed against the number of teams that were actually participating at round start, frozen for the rest of the match — never the arena's full configured team roster, and never inflated by later changes.
+
+**Hastebin export upload disabled (for now).**
+- Removed from the command surface (`/mb test` no longer has an `--upload` flag; `/mb export` no longer auto-uploads) and from the README. The underlying `HasteUploader` and the command's private upload helpers are untouched so this can be re-enabled later.
+
+**Config comments now survive upgrades.**
+- Every setting in `config.yml` (including the ones added above) now has an explanatory comment, down to individual MySQL connection-pool keys.
+- `ConfigUpdater` previously only merged in missing keys when `config-version` changed, and even then it rebuilt the file from raw values — silently dropping every comment (including the top-of-file banner) because Bukkit's config merge doesn't carry comments across a plain `.set()`. Comments were effectively gone forever after the first version-triggered merge.
+- Fixed: the config is now synced against the packaged template on *every* startup (and on `/mb reload`), not just on a version bump. User-set values always win; comments (block, inline, and the top-of-file header) always come from the template, so wording fixes reach existing installs automatically and any config that already lost its comments gets them back. The file is only rewritten (and backed up) when something actually needed fixing.
+
 ## [0.6.2] — 2026-07-14
 
 **Placement accuracy fixes:**

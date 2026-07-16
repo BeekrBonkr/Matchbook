@@ -107,7 +107,9 @@ public final class MatchbookConfig {
             return;
         }
 
-        // If it exists, update/merge if version differs
+        // If it exists, sync it against the packaged template every time we load (not just on a
+        // version bump): fills in any missing keys and restores template comments while keeping
+        // the user's own values.
         ConfigUpdater.updateIfNeeded(plugin, file, "config-version");
     }
 

@@ -2,6 +2,41 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.6.9] — 2026-07-17
+
+Stability release. A full code audit was run with a deterministic simulation harness that drives the real match-lifecycle code (virtual scheduler, simulated players/arenas, injectable stat-callback lag) through 18 hostile scenarios — ties, ragequits, rejoins, team switches, duplicate events, arena restarts, storage outages, and multithreaded stress. Four bugs were reproduced and fixed, plus three more found by inspection.
+
+**Fixed: back-to-back rounds could corrupt both matches' records.**
+- Root cause: a finished round's save runs on a delayed chain (end-snapshot delay + async stat callbacks — potentially several seconds under DB lag). If the arena started its next round inside that window, the new round *reused* the ended session still sitting in memory: it inherited the old match's code, its players/events leaked into the old match's saved document, and when the old round's save finally completed it deleted the session out from under the new round — silently dropping the rest of the new round's kills/deaths/events.
+- Fixed: an ended session is never reused — round start (and early joins/placeholder lookups) evict it and create a fresh session, while the in-flight save keeps its own reference and completes normally. Save-time session removal is now scoped (`remove(key, session)`) so a finalize running on an async thread can never delete a newer round's session. A match document whose duration would come out negative (the signature of the old merge corruption) is now rejected outright.
+
+**Fixed: a duplicate `RoundEndEvent` double-counted placements.**
+- MBedwars can re-fire `RoundEndEvent` under forced-stop conditions. Each firing ran the entire finalize chain again: the match saved twice and every player's `matchbook:*_place` counter was stamped twice (a winner would export with `1st_place = 2`). In YAML mode the second save overwrote the file with the double-stamped version.
+- Fixed: `RoundEnd` is ignored if the session already has an end time recorded.
+
+**Fixed: a team formed mid-match could steal the winner's 1st place.**
+- Root cause: the placement denominator is (correctly) frozen at round start, but if reassignment/auto-balance created an extra team mid-match, more teams could be eliminated than the frozen count — and the placement formula clamped the overflow to **1st place**. The last-eliminated team then "tied" with the real winner, and the winner's players were exported with `matchbook:ties` instead of `matchbook:1st_place` despite the match result correctly saying they won.
+- Fixed: an eliminated team's placement is floored at 2nd — an eliminated team can never have won.
+
+**Fixed: quitting and quickly rejoining could freeze a player's stats at quit-time values.**
+- Root cause: when a player quits and MBedwars provides no `QuitPlayerMemory`, their stats are captured via an async callback. If the player rejoined before that callback landed, the rejoin's stat-invalidation ran first and the stale quit-time snapshot was written *after* it — masking everything the player did post-rejoin (backstopped keys like kills/deaths survived via event counters; everything else stayed frozen).
+- Fixed: quit-time captures carry a per-player generation stamp; a rejoin bumps the generation and a stale capture discards itself instead of writing.
+
+**Fixed: tab-completing `/mb view` / `/mb export` could freeze the server.**
+- Completion ran on the main thread on every keystroke, and building the suggestion list hit storage directly — in YAML mode that meant loading *every match file on disk*; in MySQL mode, blocking queries. With a few thousand recorded matches this was a hard main-thread stall.
+- Fixed: completions are served from a per-sender cache refreshed in the background (30s TTL). Storage is never touched on the main thread; the very first keystroke after a cold cache may show no suggestions, which then appear on the next one.
+
+**Fixed: two matches ending at once could drop an entry from a shared player's history.**
+- The per-player match index (`users/<uuid>.yml`) was updated from async save threads with no locking — two matches finishing near-simultaneously with a shared player did a read-modify-write race, and one match could vanish from that player's `/mb matches` list. All index reads/writes now synchronize on a per-player lock.
+- The index's 500-entry cap also now prunes the trimmed matches' `paths.*` mappings, which previously grew forever.
+
+**Fixed: match-file name collisions in YAML mode.**
+- Filenames were `<startUnix>-<arenaHash>.yml`, so two rounds of the same arena starting within the same second silently overwrote each other. The match code is now part of the filename (`<startUnix>-<arenaHash>-<matchcode>.yml`), making collisions impossible. Nothing parses the filename (lookups read `match.match_id` from file contents), so existing files remain fully readable.
+
+**Minor:** the placeholder match-code cache now purges expired entries instead of only evicting on read (slow unbounded growth on high-traffic servers).
+
+**Verified unaffected by simulation:** clean wins, elimination placement order, tie-by-time-limit (including partial ties where a third team still records a loss), tie→win correction from recorded win stats, leave/rejoin stat integrity, live elimination on ragequit, spectator exclusion, team-switch ghost cleanup, stat-lag timeouts (event backstop), stuck-match watchdog, shutdown flush with storage down (recovery file), and a 30-round multithreaded stress test with exact stat counts.
+
 ## [0.6.8] — 2026-07-16
 
 **Tie placement fix: eliminated teams could get their real placement thrown out.**

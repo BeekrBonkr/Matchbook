@@ -101,6 +101,17 @@ public final class MatchSession {
     // Per-match stats (prefer this over start/end diffs when available)
     private final ConcurrentMap<UUID, StatSnapshot> matchStats = new ConcurrentHashMap<>();
 
+    /**
+     * Guards the quit-time stats capture against rejoins. The quit-path fallback snapshot arrives on
+     * an async stats callback; if the player rejoins before it lands, removeMatchStats() has already
+     * run and the stale quit-time snapshot must not be written afterwards — it would freeze the
+     * player's stats at quit-time values for the rest of the match. removeMatchStats() bumps the
+     * generation; putMatchStatsIfGeneration() only writes if the generation hasn't moved since the
+     * quit. Both are synchronized on this lock so check-and-put is atomic against the bump.
+     */
+    private final Object matchStatsGenLock = new Object();
+    private final java.util.Map<UUID, Long> matchStatsGeneration = new java.util.HashMap<>();
+
     private final ConcurrentMap<UUID, Long> startTakenUnixByPlayer = new ConcurrentHashMap<>();
 
     // Reliable per-match counters based on MBedwars events.
@@ -217,7 +228,29 @@ public Set<UUID> getParticipants() {
     }
 
     public void removeMatchStats(UUID uuid) {
-        matchStats.remove(uuid);
+        if (uuid == null) return;
+        synchronized (matchStatsGenLock) {
+            matchStatsGeneration.merge(uuid, 1L, Long::sum);
+            matchStats.remove(uuid);
+        }
+    }
+
+    /** Current invalidation generation for a player's captured match stats (see matchStatsGenLock). */
+    public long getMatchStatsGeneration(UUID uuid) {
+        if (uuid == null) return 0L;
+        synchronized (matchStatsGenLock) {
+            return matchStatsGeneration.getOrDefault(uuid, 0L);
+        }
+    }
+
+    /** Writes a captured snapshot only if the player's stats weren't invalidated (rejoin) since {@code expectedGeneration} was read. */
+    public void putMatchStatsIfGeneration(UUID uuid, StatSnapshot snap, long expectedGeneration) {
+        if (uuid == null || snap == null) return;
+        synchronized (matchStatsGenLock) {
+            if (matchStatsGeneration.getOrDefault(uuid, 0L) == expectedGeneration) {
+                matchStats.put(uuid, snap);
+            }
+        }
     }
 
     public StatSnapshot getMatchStats(UUID uuid) {

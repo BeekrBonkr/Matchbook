@@ -36,7 +36,11 @@ public final class MatchStorage {
         File dayFolder = getDayFolder(new Date(doc.startUnix() * 1000L));
 
         String md5 = md5Hex(doc.arenaName());
-        String fileName = doc.startUnix() + "-" + md5 + ".yml";
+        // Include the matchId: startUnix+arena alone can collide (two rounds of the same arena
+        // starting within the same second, e.g. after a fast restart), which would silently
+        // overwrite the earlier match's file. Nothing parses this filename — lookups read
+        // match.match_id from the file contents — so this is safe for existing installs.
+        String fileName = doc.startUnix() + "-" + md5 + "-" + doc.matchId() + ".yml";
         File outFile = new File(dayFolder, fileName);
 
         YamlConfiguration yml = MatchYamlCodec.toYaml(doc);

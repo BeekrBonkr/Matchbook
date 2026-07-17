@@ -45,6 +45,28 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
     private final MatchbookPlugin plugin;
     private final MatchExporter exporter;
 
+    /**
+     * Tab-completion cache for match ids, refreshed asynchronously.
+     *
+     * Tab completion runs on the main thread on every keystroke, but building the candidate list
+     * hits storage: in YAML mode listAllMatchIds() loads EVERY match file on disk, and in MySQL
+     * mode both lookups are blocking queries. On a server with a few thousand matches that froze
+     * the main thread whenever someone tab-completed /mb view or /mb export. Instead, completion
+     * serves the last cached list immediately (possibly empty on the very first keystroke) and
+     * kicks off a background refresh when the cache is older than the TTL.
+     */
+    private static final long TAB_CACHE_TTL_MS = 30_000L;
+    private static final int TAB_CACHE_MAX_SENDERS = 200;
+
+    private static final class CachedIds {
+        final List<String> ids;
+        final long fetchedAt;
+        CachedIds(List<String> ids, long fetchedAt) { this.ids = ids; this.fetchedAt = fetchedAt; }
+    }
+
+    private final java.util.concurrent.ConcurrentMap<String, CachedIds> tabIdCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Set<String> tabRefreshInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     public MatchbookCommand(MatchbookPlugin plugin) {
         this.plugin = plugin;
         this.exporter = new MatchExporter(plugin);
@@ -402,21 +424,42 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
         return List.of();
     }
 
-    /** Recent match ids; prioritizes the sender's own history when they're a player. */
+    /**
+     * Recent match ids; prioritizes the sender's own history when they're a player.
+     *
+     * Served from an async-refreshed cache — storage is never touched on the main thread here
+     * (see tabIdCache). The first keystroke after a cold/expired cache may return an empty or
+     * stale list; the refreshed ids show up on the next completion attempt.
+     */
     private List<String> candidateMatchIds(CommandSender sender) {
-        List<String> ids = new ArrayList<>();
-        try {
-            if (sender instanceof Player p) {
-                ids.addAll(plugin.getRepo().listMatchIdsForPlayer(p.getUniqueId()));
-            }
-            if (ids.isEmpty()) {
-                ids.addAll(plugin.getRepo().listAllMatchIds());
-            }
-        } catch (Exception ignored) {}
+        UUID senderUuid = sender instanceof Player p ? p.getUniqueId() : null;
+        String key = senderUuid != null ? senderUuid.toString() : "console";
 
-        // cap suggestions (tab complete should be light)
-        if (ids.size() > 50) ids = ids.subList(0, 50);
-        return ids;
+        long now = System.currentTimeMillis();
+        CachedIds cached = tabIdCache.get(key);
+
+        if ((cached == null || now - cached.fetchedAt > TAB_CACHE_TTL_MS) && tabRefreshInFlight.add(key)) {
+            org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                try {
+                    List<String> ids = new ArrayList<>();
+                    if (senderUuid != null) {
+                        ids.addAll(plugin.getRepo().listMatchIdsForPlayer(senderUuid));
+                    }
+                    if (ids.isEmpty()) {
+                        ids.addAll(plugin.getRepo().listAllMatchIds());
+                    }
+                    if (ids.size() > 50) ids = new ArrayList<>(ids.subList(0, 50));
+
+                    if (tabIdCache.size() > TAB_CACHE_MAX_SENDERS) tabIdCache.clear();
+                    tabIdCache.put(key, new CachedIds(List.copyOf(ids), System.currentTimeMillis()));
+                } catch (Exception ignored) {
+                } finally {
+                    tabRefreshInFlight.remove(key);
+                }
+            });
+        }
+
+        return cached != null ? cached.ids : List.of();
     }
 
     /**
@@ -533,7 +576,9 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
     }
 
     private static List<String> filterPrefix(List<String> options, String partial) {
-        if (partial == null || partial.isBlank()) return options;
+        // Copy: the server may sort the returned completions in place, and options can be an
+        // immutable cached list.
+        if (partial == null || partial.isBlank()) return new ArrayList<>(options);
         String p = partial.toLowerCase(Locale.ROOT);
         List<String> out = new ArrayList<>();
         for (String o : options) {

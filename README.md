@@ -15,6 +15,7 @@ A Paper plugin that records persistent match history for [MBedwars](https://www.
 - **PlaceholderAPI** — exposes `%matchbook_matchcode%` for scoreboards/holograms.
 - **Dual storage** — flat YAML files (default) or MySQL/MariaDB with one-command migration.
 - **Auto config updates** — on plugin upgrade, new config keys are added automatically while preserving your existing settings.
+- **Built for reliability** — saves retry and fall back to a local recovery file if storage is down; duplicate round-end events, back-to-back arena restarts, quick leave/rejoins, and mid-match team changes are all handled without corrupting records. The match lifecycle is covered by a simulation harness that replays these edge cases against the real code.
 - **Proxy/network safe** — on a hub server with no arenas of its own, Matchbook won't create match records for arenas MBedwars merely knows about over the network (via its remote-arena awareness); it only tracks arenas actually running on that server.
 - **Hub/lobby mode** — an explicit `mode.hub` config flag to fully disable match recording on a server, while still reading and exporting matches from the shared storage backend.
 
@@ -282,9 +283,10 @@ If you run YAML storage per-server, each server's match history stays local to i
 plugins/MBedwars/add-ons/Matchbook/
 ├── config.yml
 ├── matches/
-│   ├── 2026-06-30/
-│   │   ├── AB12.yml
-│   │   └── CD34.yml
+│   ├── 06-30-2026/                      ← one folder per day (MM-dd-yyyy)
+│   │   ├── 1751297443-a1b2c3…-8F3K-Q2JD.yml   ← <startUnix>-<arenaHash>-<matchcode>.yml
+│   │   └── 1751299018-a1b2c3…-M7G9-QDQ9.yml
+│   ├── failed/                          ← recovery copies written when storage was down
 │   └── ...
 ├── users/
 │   └── <player-uuid>.yml    ← per-player match index

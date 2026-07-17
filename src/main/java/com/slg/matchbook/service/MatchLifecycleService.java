@@ -118,8 +118,7 @@ public final class MatchLifecycleService {
     public MatchSession getOrCreateSession(Arena arena, String reason) {
         if (arena == null || !isLocallyHosted(arena)) return null;
 
-        MatchSession session = sessionsByArena.computeIfAbsent(arena.getName(), __ ->
-                new MatchSession(MatchIdUtil.newMatchId(), arena.getName(), System.currentTimeMillis() / 1000L));
+        MatchSession session = liveSessionOrNew(arena.getName());
 
         // If this call originated from a player context, we still want placeholders to be stable
         // while the player is transitioning.
@@ -144,22 +143,44 @@ public final class MatchLifecycleService {
     public void cacheMatchId(UUID playerUuid, String arenaName, String matchId) {
         if (playerUuid == null || matchId == null || matchId.isBlank()) return;
         long graceSeconds = plugin.getMatchbookConfig().raw().getLong("placeholder.grace_seconds", 60L);
-        long expires = System.currentTimeMillis() + Math.max(5L, graceSeconds) * 1000L;
+        long now = System.currentTimeMillis();
+        long expires = now + Math.max(5L, graceSeconds) * 1000L;
         lastMatchIdByPlayer.put(playerUuid, new CachedMatchId(matchId, arenaName, expires));
+
+        // Entries are otherwise only evicted on read, so players who never resolve a placeholder
+        // again would accumulate forever. Purge expired entries once the map grows noticeable.
+        if (lastMatchIdByPlayer.size() > 512) {
+            lastMatchIdByPlayer.values().removeIf(c -> now > c.expiresAtMillis());
+        }
+    }
+
+    /**
+     * Returns the arena's current session, creating one if absent — but NEVER an already-ended one.
+     *
+     * A session with endUnix set belongs to a finished round whose delayed save chain hasn't removed
+     * it from the map yet (end-snapshot delay + stats callbacks can take seconds under load). If the
+     * arena starts its next round inside that window, reusing the ended session would merge the two
+     * rounds into one match document: the new round inherits the old matchId, its players leak into
+     * the old match's record, and the old round's finalize then removes the session out from under
+     * the new round, silently dropping the rest of its events. Ended sessions are evicted here and a
+     * fresh one is created instead; the finalize chain keeps its own direct reference, so its save is
+     * unaffected.
+     */
+    private MatchSession liveSessionOrNew(String arenaName) {
+        while (true) {
+            MatchSession session = sessionsByArena.computeIfAbsent(arenaName, __ ->
+                    new MatchSession(MatchIdUtil.newMatchId(), arenaName, System.currentTimeMillis() / 1000L));
+            if (session.endUnix == null) return session;
+            sessionsByArena.remove(arenaName, session);
+        }
     }
 
     public void onRoundStart(Arena arena) {
         if (arena == null || !isLocallyHosted(arena)) return;
 
-        // If a session already exists (created early on first join), reuse its matchId.
-        MatchSession session = sessionsByArena.get(arena.getName());
-        if (session == null) {
-            // Short human-friendly code for esports submissions
-            String matchId = MatchIdUtil.newMatchId();
-            long startUnix = System.currentTimeMillis() / 1000L;
-            session = new MatchSession(matchId, arena.getName(), startUnix);
-            sessionsByArena.put(arena.getName(), session);
-        }
+        // Reuse the pre-round session (created early on first join) so its matchId stays stable,
+        // but never an ended one still awaiting its save chain.
+        MatchSession session = liveSessionOrNew(arena.getName());
 
         // Overwrite start time at the true round start.
         session.startUnix = System.currentTimeMillis() / 1000L;
@@ -212,8 +233,7 @@ public final class MatchLifecycleService {
         if (arena == null || player == null || !isLocallyHosted(arena)) return;
 
         // Create a session early so placeholders can resolve during pre-round phases.
-        MatchSession session = sessionsByArena.computeIfAbsent(arena.getName(), __ ->
-                new MatchSession(MatchIdUtil.newMatchId(), arena.getName(), System.currentTimeMillis() / 1000L));
+        MatchSession session = liveSessionOrNew(arena.getName());
 
         UUID uuid = player.getUniqueId();
         cacheMatchId(uuid, arena.getName(), session.matchId);
@@ -389,8 +409,12 @@ public final class MatchLifecycleService {
                 }
             }
         } else {
-            // Fallback: try to read live game stats right now (safe at quit-time).
-            snapshotGameTrackedStats(uuid, snap -> session.putMatchStats(uuid, snap));
+            // Fallback: try to read live game stats right now (safe at quit-time). The callback can
+            // arrive on an async thread AFTER this player has already rejoined (which invalidates
+            // quit-time stats via removeMatchStats); guard with the generation so a stale snapshot
+            // can't resurrect and freeze their stats at quit-time values.
+            long gen = session.getMatchStatsGeneration(uuid);
+            snapshotGameTrackedStats(uuid, snap -> session.putMatchStatsIfGeneration(uuid, snap, gen));
         }
     }
 
@@ -399,6 +423,11 @@ public final class MatchLifecycleService {
 
         MatchSession session = sessionsByArena.get(arena.getName());
         if (session == null) return;
+
+        // Duplicate RoundEnd (MBedwars can re-fire it under forced-stop conditions): the first one
+        // already scheduled the finalize chain. Running it twice would save the match twice and
+        // stamp every player's matchbook:*_place counter twice.
+        if (session.endUnix != null) return;
 
         session.endUnix = System.currentTimeMillis() / 1000L;
 
@@ -458,7 +487,13 @@ public final class MatchLifecycleService {
         if (totalTeams <= 0) totalTeams = Math.max(1, session.participatingTeams.size());
 
         int eliminatedIndex = session.eliminationOrder.size(); // 1-based
-        int place = Math.max(1, totalTeams - eliminatedIndex + 1);
+        // Never clamp an eliminated team up to 1st: if more teams get eliminated than the frozen
+        // round-start count (a team formed mid-match via reassignment/auto-balance), the raw
+        // formula goes to 1 or below — which would falsely tie the last-eliminated team with the
+        // real winner and downgrade the winner's 1st_place credit into a "tie". An eliminated team
+        // can never have won, so floor at 2nd (multiple overflow teams may share it; better a
+        // duplicate 2nd than a stolen 1st).
+        int place = Math.max(2, totalTeams - eliminatedIndex + 1);
         session.setPlacementIfAbsent(team, place);
     }
 
@@ -990,7 +1025,10 @@ public final class MatchLifecycleService {
         }
 
         // Remove the session now (we have what we need). This prevents late events from touching it.
-        sessionsByArena.remove(arena.getName());
+        // Keyed removal only: this can run on an async stats-callback thread, and if the arena has
+        // already started its next round (which evicted this ended session and mapped a fresh one),
+        // a blind remove(name) would kill the NEW round's session instead.
+        sessionsByArena.remove(arena.getName(), session);
 
         session.applyTriggerIncrementsToMatchStats(PERSIST_TRIGGER_KEYS);
         MatchDocument doc = MatchDocument.fromSession(session, result);
@@ -1029,9 +1067,12 @@ public final class MatchLifecycleService {
 
     private boolean exceedsMaxDuration(MatchDocument doc) {
         if (doc == null) return false;
+        long durationSeconds = doc.endUnix() - doc.startUnix();
+        // A negative duration is always broken data (e.g. a session whose startUnix was overwritten
+        // after its end was recorded) — reject it even when max_duration is disabled.
+        if (durationSeconds < 0L) return true;
         long maxMinutes = maxDurationMinutes();
         if (maxMinutes <= 0L) return false;
-        long durationSeconds = doc.endUnix() - doc.startUnix();
         return durationSeconds > maxMinutes * 60L;
     }
 
@@ -1315,7 +1356,7 @@ public final class MatchLifecycleService {
                                     + " (matchId=" + current.matchId + ") — running " + elapsedMinutes
                                     + "m without a round end, which exceeds match.max_duration_minutes ("
                                     + maxMinutes + "). Not saving; this match is considered broken.");
-                            sessionsByArena.remove(arena.getName());
+                            sessionsByArena.remove(arena.getName(), current);
                             return;
                         }
                     }
@@ -1340,7 +1381,7 @@ public final class MatchLifecycleService {
                         persistMatch(doc, false);
                     });
 
-                    sessionsByArena.remove(arena.getName());
+                    sessionsByArena.remove(arena.getName(), current);
                 }
             }
         }.runTaskTimer(plugin, 20L, 20L);

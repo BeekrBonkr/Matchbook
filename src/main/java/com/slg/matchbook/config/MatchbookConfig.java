@@ -79,6 +79,7 @@ public final class MatchbookConfig {
         long startSnapshotDelayTicks = clampLong(raw().getLong("match.start_snapshot_delay_ticks", 20L), 0L, 20L * 60L);
         long endSnapshotDelayTicks = clampLong(raw().getLong("match.end_snapshot_delay_ticks", 80L), 0L, 20L * 60L);
         long snapshotTimeoutTicks = clampLong(raw().getLong("match.snapshot_timeout_ticks", 80L), 1L, 20L * 60L);
+        long joinClassifyDelayTicks = clampLong(raw().getLong("match.join_classify_delay_ticks", 60L), 0L, 20L * 60L);
 
         List<String> columns = raw().getStringList("export.columns");
         if (columns != null) {
@@ -97,6 +98,7 @@ public final class MatchbookConfig {
                 startSnapshotDelayTicks,
                 endSnapshotDelayTicks,
                 snapshotTimeoutTicks,
+                joinClassifyDelayTicks,
                 new RuntimeSettings.ExportSettings(columns == null || columns.isEmpty() ? null : List.copyOf(columns))
         );
     }

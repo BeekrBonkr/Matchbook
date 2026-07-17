@@ -241,6 +241,10 @@ public final class MatchesDetailsGui implements Listener {
         String placement = resolvePlacement(diff);
         if (placement != null) {
             lore.add(ChatColor.GRAY + "• " + ChatColor.WHITE + "Placement: " + ChatColor.GOLD + placement);
+        } else if (diff.getOrDefault("matchbook:ties", 0L) > 0L) {
+            // Tied teams intentionally have no matchbook:*_place key (a tie isn't a definitive
+            // placement) — show 0 rather than silently omitting the line.
+            lore.add(ChatColor.GRAY + "• " + ChatColor.WHITE + "Placement: " + ChatColor.GOLD + "0");
         }
 
         List<String> preferred = List.of(

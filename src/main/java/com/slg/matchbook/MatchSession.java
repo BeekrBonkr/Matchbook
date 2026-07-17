@@ -27,6 +27,13 @@ public final class MatchSession {
     public volatile Long endUnix = null;
     public final String matchId;
 
+    /**
+     * True once RoundStartEvent has actually fired for this session (not just the early session
+     * created on first join). Used to suppress pre-match join/leave events — nobody wants a lobby
+     * full of PLAYER_JOIN/PLAYER_LEAVE noise in the match's event log before the game even started.
+     */
+    public volatile boolean started = false;
+
     // Thread-safe: mutated from both the main thread (event handlers) and the async MBedwars
     // stats-callback chain that runs finalizePlacements()/getArenaTeamsSafe() at round end.
     public final Set<de.marcely.bedwars.api.arena.Team> bedLostTeams = ConcurrentHashMap.newKeySet();

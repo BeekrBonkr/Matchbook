@@ -52,7 +52,7 @@ public final class MatchesGui implements Listener {
             int end   = Math.min(matchIds.size(), start + PAGE_SLOTS);
             List<ItemStack> items = new ArrayList<>();
             for (int i = start; i < end; i++) {
-                items.add(buildMatchItem(viewerUuid, matchIds.get(i)));
+                items.add(buildMatchItem(viewerUuid, matchIds.get(i), true));
             }
 
             int maxPageFinal = maxPage;
@@ -87,7 +87,7 @@ public final class MatchesGui implements Listener {
             int end   = Math.min(matchIds.size(), start + PAGE_SLOTS);
             List<ItemStack> items = new ArrayList<>();
             for (int i = start; i < end; i++) {
-                items.add(buildMatchItem(viewerUuid, matchIds.get(i)));
+                items.add(buildMatchItem(viewerUuid, matchIds.get(i), false));
             }
 
             int maxPageFinal = maxPage;
@@ -132,7 +132,7 @@ public final class MatchesGui implements Listener {
     // Match item builder
     // -----------------------------------------------------------------------
 
-    private ItemStack buildMatchItem(UUID viewerUuid, String matchEntry) {
+    private ItemStack buildMatchItem(UUID viewerUuid, String matchEntry, boolean includeViewerStats) {
         String matchId = matchEntry;
         if (matchEntry != null && (matchEntry.contains("/") || matchEntry.endsWith(".yml"))) {
             File legacy = new File(new File(plugin.getAddonDataFolder(), "matches"), matchEntry);
@@ -223,13 +223,15 @@ public final class MatchesGui implements Listener {
         }
         lore.add("");
 
-        // Viewer stats
-        lore.add(statLine("Kills",        yml.getLong(viewerBase + ".diff.bedwars:kills",         0)));
-        lore.add(statLine("Final Kills",  yml.getLong(viewerBase + ".diff.bedwars:final_kills",   0)));
-        lore.add(statLine("Final Deaths", yml.getLong(viewerBase + ".diff.bedwars:final_deaths",  0)));
-        lore.add(statLine("Beds",         yml.getLong(viewerBase + ".diff.bedwars:beds_destroyed",0)));
-
-        lore.add("");
+        // Viewer stats — omitted in the "All Matches" browse view, where the viewer is looking
+        // at matches they may not have even participated in, so "their" stats would be meaningless.
+        if (includeViewerStats) {
+            lore.add(statLine("Kills",        yml.getLong(viewerBase + ".diff.bedwars:kills",         0)));
+            lore.add(statLine("Final Kills",  yml.getLong(viewerBase + ".diff.bedwars:final_kills",   0)));
+            lore.add(statLine("Final Deaths", yml.getLong(viewerBase + ".diff.bedwars:final_deaths",  0)));
+            lore.add(statLine("Beds",         yml.getLong(viewerBase + ".diff.bedwars:beds_destroyed",0)));
+            lore.add("");
+        }
         lore.add(ChatColor.DARK_GRAY + "Click to view match details");
 
         meta.setLore(lore);

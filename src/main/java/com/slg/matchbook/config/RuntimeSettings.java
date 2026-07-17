@@ -13,6 +13,7 @@ public record RuntimeSettings(
         long startSnapshotDelayTicks,
         long endSnapshotDelayTicks,
         long snapshotTimeoutTicks,
+        long joinClassifyDelayTicks,
         ExportSettings export
 ) {
 

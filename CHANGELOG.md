@@ -2,6 +2,25 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.6.8] — 2026-07-16
+
+**Tie placement fix: eliminated teams could get their real placement thrown out.**
+- Root cause: at round end, tie detection scans every participating team for "still alive" using `alivePlayersByTeam`, falling back to reflection on the live MBedwars `Team` object when a team has no tracked alive-entry. That fallback could misreport an already-eliminated team as still alive, and its real placement (e.g. 3rd/4th) would then get force-overwritten with a false tie-for-1st — so a match with a genuine 2-team tie could end up with *every* team's players marked `matchbook:ties`, wiping out the eliminated teams' actual placement columns entirely. Confirmed against a reported match (`z4qf-8rpf`) where RED and YELLOW were cleanly eliminated via `TeamEliminateEvent` but still ended up tied in the exported CSV.
+- Fixed: a team that already has a recorded placement is never reconsidered by the tie-detection scan. Non-tied teams now always keep their real placement; only the teams that genuinely tied show up in `matchbook:ties`.
+- The match-details GUI now shows **"Placement: 0"** for tied players instead of silently omitting the line.
+
+**Spectator/team-assignment race right after round start.**
+- Team and spectator classification was read from MBedwars synchronously the instant a player's join event fires. In the first couple seconds after a round starts, MBedwars can still be settling that state — a genuine spectator could transiently read back a stale/leftover team (getting miscounted as a participant), and a real player could transiently read back no team at all. The same race affected the round-start roster snapshot, which is frozen once (`totalTeams()`) and never re-evaluated, so an undercount there was permanent for the rest of the match.
+- Both the per-join classification and the round-start roster snapshot now wait a configurable delay (new `match.join_classify_delay_ticks`, default 60 ticks / 3s) before reading team/spectator state, giving MBedwars time to settle first.
+
+**Pre-match join/leave events no longer logged.**
+- `PLAYER_JOIN` / `PLAYER_LEAVE` / `SPECTATOR_JOIN` / `SPECTATOR_LEAVE` events are now only recorded once the match has actually started — lobby-phase joins and leaves (players queueing, spectators bouncing in and out before the round begins) no longer clutter the event log.
+
+**"All Matches" browse view no longer shows misleading personal stats.**
+- The admin/browse-all matches list reused the same item-lore builder as the personal match history view, so every match item showed *your* Kills/Final Kills/Final Deaths/Beds — meaningless (usually all zero) for matches you never played in. The All Matches view no longer includes any per-viewer stat lines; your personal match history is unaffected.
+
+**Investigated:** a report that final kills cause minor local lag spikes. Traced through the full kill/death/team-elimination handling path — everything Matchbook itself does there is cheap in-memory map/set bookkeeping with no I/O, reflection, or blocking calls (the reflection-heavy code only runs once at round end). No concrete cause was found in this plugin's code; the spikes are more likely from MBedwars' own final-kill effects (bed-destroy particles/fireworks, camera work) rather than Matchbook.
+
 ## [0.6.7] — 2026-07-16
 
 **Critical build fix: 0.6.6 crashed on MySQL storage with `NoClassDefFoundError: com/zaxxer/hikari/HikariConfig`.**

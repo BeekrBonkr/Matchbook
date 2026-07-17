@@ -165,8 +165,30 @@ public final class MatchLifecycleService {
         session.startUnix = System.currentTimeMillis() / 1000L;
 
         session.addEvent(MatchEvent.matchStart(session.startUnix));
+        session.started = true;
 
-        // Participants at start
+        // Take totals snapshot near start for auditing/debugging.
+        takeStartSnapshots(arena, session);
+
+        // Watchdog in case MBedwars doesn't fire RoundEnd.
+        startAbortWatchdog(arena, session);
+
+        // Capture the round-start roster (who's on which team) after a short delay, same as
+        // classifyArenaJoin(). MBedwars can still be settling team assignments for a few ticks right
+        // as RoundStartEvent fires, so reading arena.getPlayerTeam() immediately can undercount teams
+        // — which then permanently undercounts totalTeams() below (it's frozen once) and can leave
+        // some players' teams unrecorded entirely.
+        MatchSession finalSession = session;
+        long delay = plugin.getMatchbookConfig().runtimeSettings().joinClassifyDelayTicks();
+        Runnable captureRoster = () -> captureRoundStartRoster(arena, finalSession);
+        if (delay <= 0L) {
+            captureRoster.run();
+        } else {
+            Bukkit.getScheduler().runTaskLater(plugin, captureRoster, delay);
+        }
+    }
+
+    private void captureRoundStartRoster(Arena arena, MatchSession session) {
         for (Player p : arena.getPlayers()) {
             session.unmarkSpectatorOnly(p.getUniqueId());
             session.addParticipant(p.getUniqueId());
@@ -181,15 +203,9 @@ public final class MatchLifecycleService {
             cacheMatchId(p.getUniqueId(), arena.getName(), session.matchId);
         }
 
-        // Every team's roster should be known by round start; freeze totalTeams() so that a very
-        // early elimination can't compute placement against a still-growing, undercounted team set.
+        // Every team's roster should be known by now; freeze totalTeams() so that a very early
+        // elimination can't compute placement against a still-growing, undercounted team set.
         session.freezeTotalTeams();
-
-        // Take totals snapshot near start for auditing/debugging.
-        takeStartSnapshots(arena, session);
-
-        // Watchdog in case MBedwars doesn't fire RoundEnd.
-        startAbortWatchdog(arena, session);
     }
 
     public void onPlayerJoinArena(Arena arena, Player player) {
@@ -199,6 +215,37 @@ public final class MatchLifecycleService {
         MatchSession session = sessionsByArena.computeIfAbsent(arena.getName(), __ ->
                 new MatchSession(MatchIdUtil.newMatchId(), arena.getName(), System.currentTimeMillis() / 1000L));
 
+        UUID uuid = player.getUniqueId();
+        cacheMatchId(uuid, arena.getName(), session.matchId);
+
+        // MBedwars can briefly report stale/incomplete team and spectator state right when a
+        // player joins — most noticeably in the seconds right after a round starts, where a
+        // genuine spectator can transiently read back a leftover/default team (getting wrongly
+        // counted as a participant) or a real player can transiently read back no team at all.
+        // Wait a moment so MBedwars settles before we classify them.
+        long delay = plugin.getMatchbookConfig().runtimeSettings().joinClassifyDelayTicks();
+        if (delay <= 0L) {
+            classifyArenaJoin(arena, player, session);
+            return;
+        }
+
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (!player.isOnline() || !isStillInArena(arena, player)) return;
+            classifyArenaJoin(arena, player, session);
+        }, delay);
+    }
+
+    private boolean isStillInArena(Arena arena, Player player) {
+        try {
+            return arena.getPlayers().contains(player);
+        } catch (Throwable ignored) {
+            // Fail open: better to classify a player than to silently drop a real participant
+            // because of an unrelated reflection/API hiccup.
+            return true;
+        }
+    }
+
+    private void classifyArenaJoin(Arena arena, Player player, MatchSession session) {
         UUID uuid = player.getUniqueId();
 
         // Determine current role
@@ -211,7 +258,7 @@ public final class MatchLifecycleService {
             session.unmarkPending(uuid);
             session.markSpectatorOnly(uuid);
             session.setUsername(uuid, player.getName());
-            if (session.tryLogJoin(uuid)) {
+            if (session.started && session.tryLogJoin(uuid)) {
                 session.addEvent(MatchEvent.spectatorJoin(now(), player.getUniqueId().toString(), player.getName()));
             }
             cacheMatchId(uuid, arena.getName(), session.matchId);
@@ -224,7 +271,7 @@ public final class MatchLifecycleService {
             session.unmarkSpectatorOnly(uuid);
             session.markPending(uuid);
             session.setUsername(uuid, player.getName());
-            if (session.tryLogJoin(uuid)) {
+            if (session.started && session.tryLogJoin(uuid)) {
                 session.addEvent(MatchEvent.playerJoin(now(), player.getUniqueId().toString(), player.getName(), null));
             }
             cacheMatchId(uuid, arena.getName(), session.matchId);
@@ -234,7 +281,7 @@ public final class MatchLifecycleService {
         // Real participant (team assigned, or already known participant)
         session.promoteToParticipant(uuid, team);
         session.setUsername(uuid, player.getName());
-        if (session.tryLogJoin(uuid)) {
+        if (session.started && session.tryLogJoin(uuid)) {
             String teamName = team != null ? team.name() : null;
             session.addEvent(MatchEvent.playerJoin(now(), player.getUniqueId().toString(), player.getName(), teamName));
         }
@@ -256,7 +303,7 @@ public final class MatchLifecycleService {
         session.removeMatchStats(uuid);
 
         cacheMatchId(uuid, arena.getName(), session.matchId);
-}
+    }
 
     public void onArenaWinningTeam(Arena arena, Team winningTeam) {
         if (arena == null) return;
@@ -293,7 +340,9 @@ public final class MatchLifecycleService {
             session.markSpectatorOnly(uuid);
             session.unmarkPending(uuid);
             session.setUsername(uuid, player.getName());
-            session.addEvent(MatchEvent.spectatorLeave(now(), player.getUniqueId().toString(), player.getName()));
+            if (session.started) {
+                session.addEvent(MatchEvent.spectatorLeave(now(), player.getUniqueId().toString(), player.getName()));
+            }
             return;
         }
 
@@ -307,8 +356,10 @@ public final class MatchLifecycleService {
         // quit, or were they still an active alive player? Must be read BEFORE markPlayerFinalDead
         // below, which would otherwise make every leaving player look like they "were spectating".
         boolean wasSpectating = effectiveTeam != null && !session.isPlayerAlive(effectiveTeam, uuid);
-        session.addEvent(MatchEvent.playerLeave(now(), player.getUniqueId().toString(), player.getName(),
-                leavingTeam, wasSpectating));
+        if (session.started) {
+            session.addEvent(MatchEvent.playerLeave(now(), player.getUniqueId().toString(), player.getName(),
+                    leavingTeam, wasSpectating));
+        }
 
         // If they quit mid-match, treat as no longer alive for placement purposes.
         // (This matches esports expectations: leaving = eliminated / not alive.)
@@ -434,9 +485,18 @@ public final class MatchLifecycleService {
         // Detect tie by observing >1 teams still alive at game-over.
         // This can happen when the match ends via time limit / forced end.
         // In that case, ALL alive teams should be considered "1st place".
+        //
+        // A team that was already definitively eliminated (has a recorded placement from live
+        // elimination tracking) must NEVER be reconsidered here. isTeamAliveAtEnd() falls back to
+        // reflection across MBedwars Team methods when our own alivePlayersByTeam tracking has no
+        // entry for that team (e.g. it never got a markPlayerAlive() call), and that fallback can
+        // misreport an already-eliminated team as still alive. Without this guard, such a team's
+        // real placement (e.g. 3rd/4th) gets clobbered with a false tie-for-1st — throwing out a
+        // correct placement for a team that never actually tied for anything.
         List<Team> aliveAtEnd = new ArrayList<>();
         for (Team t : session.participatingTeams) {
             if (t == null) continue;
+            if (session.placementByTeam.containsKey(t)) continue;
             if (isTeamAliveAtEnd(t, session)) aliveAtEnd.add(t);
         }
 
@@ -448,7 +508,7 @@ public final class MatchLifecycleService {
             session.result = "TIE";
             session.winningTeam = null;
             for (Team t : aliveAtEnd) {
-                session.setPlacement(t, 1);
+                session.setPlacementIfAbsent(t, 1);
             }
         }
 
@@ -743,7 +803,7 @@ public final class MatchLifecycleService {
         session.markSpectatorOnly(uuid);
         session.unmarkPending(uuid);
         session.setUsername(uuid, player.getName());
-        if (session.tryLogJoin(uuid)) {
+        if (session.started && session.tryLogJoin(uuid)) {
             session.addEvent(MatchEvent.spectatorJoin(now(), uuid.toString(), player.getName()));
         }
         cacheMatchId(uuid, arena.getName(), session.matchId);

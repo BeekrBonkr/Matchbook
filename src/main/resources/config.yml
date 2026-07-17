@@ -1,6 +1,6 @@
 # ============================================================
 #  Matchbook Configuration
-#  Plugin version: 0.6.7  |  Config version: 0.1.0
+#  Plugin version: 0.6.8  |  Config version: 0.1.1
 #
 #  When you update the plugin, Matchbook will automatically:
 #    1. Back up your current config  (config.yml.bak-<version>-<date>)
@@ -11,7 +11,7 @@
 # ============================================================
 
 # Internal config schema version — do not change this.
-config-version: "0.1.0"
+config-version: "0.1.1"
 
 # ============================================================
 #  Mode
@@ -111,6 +111,14 @@ match:
   # How long (in ticks) to wait for individual player stat callbacks before
   # marking the snapshot as timed-out and continuing without that player.
   snapshot_timeout_ticks: 40
+
+  # Delay in ticks before classifying a player who joins an arena as a spectator,
+  # a real team participant, or team-pending. MBedwars can briefly report stale/incomplete
+  # team and spectator state right when a player joins (most noticeably in the seconds right
+  # after a round starts), which can misclassify a spectator as a team member or leave a real
+  # player without a team. Waiting a moment lets MBedwars settle before Matchbook reads it.
+  # 20 ticks = 1 second. Range: 0–1200.
+  join_classify_delay_ticks: 60
 
   # Maximum sane match duration, in minutes. Matchbook watches every in-progress match and
   # discards (never saves) any match that runs longer than this without a proper round end —

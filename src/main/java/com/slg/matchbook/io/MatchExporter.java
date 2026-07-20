@@ -44,6 +44,7 @@ public final class MatchExporter {
 
             // Top: match codes used
             out.println("# match_codes: " + matchCode);
+            out.println("# matchbook_version: " + recordedVersion(yml));
 
             out.println(String.join(",", headerForColumns(columns)));
 
@@ -134,6 +135,7 @@ public final class MatchExporter {
 
             // Top: list match codes used
             out.println("# match_codes: " + String.join(", ", matchCodes));
+            out.println("# matchbook_versions: " + recordedVersions(matchCodes, matchYmls));
 
             out.println(String.join(",", headerForColumns(columns)));
 
@@ -141,6 +143,34 @@ public final class MatchExporter {
         }
 
         return outFile;
+    }
+
+    /**
+     * The Matchbook version that RECORDED this match, as persisted in the match document at session
+     * creation. Matches saved by builds predating the field export as "unknown" — deliberately not
+     * the currently running version, which says nothing about what recorded the data.
+     */
+    private static String recordedVersion(YamlConfiguration yml) {
+        String v = yml != null ? yml.getString("match.matchbook_version", null) : null;
+        return (v == null || v.isBlank()) ? "unknown" : v;
+    }
+
+    private static String recordedVersions(List<String> matchCodes, List<YamlConfiguration> matchYmls) {
+        Map<String, String> byCode = new LinkedHashMap<>();
+        for (int i = 0; i < matchCodes.size() && i < matchYmls.size(); i++) {
+            byCode.put(matchCodes.get(i), recordedVersion(matchYmls.get(i)));
+        }
+        return joinVersions(byCode);
+    }
+
+    private static String joinVersions(Map<String, String> versionByCode) {
+        // Collapse to a single value when every match was recorded by the same build.
+        Set<String> distinct = new HashSet<>(versionByCode.values());
+        if (distinct.size() == 1) return distinct.iterator().next();
+
+        List<String> parts = new ArrayList<>();
+        for (var e : versionByCode.entrySet()) parts.add(e.getKey() + "=" + e.getValue());
+        return String.join(", ", parts);
     }
 
     private static String csv(String s) {
@@ -326,6 +356,7 @@ public final class MatchExporter {
              PrintWriter out = new PrintWriter(w)) {
 
             out.println("# match: " + matchCode);
+            out.println("# matchbook_version: " + recordedVersion(yml));
             out.println("offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,"
                     + "killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating");
 
@@ -342,9 +373,11 @@ public final class MatchExporter {
         if (matchCodes == null || matchCodes.isEmpty()) return null;
 
         List<Map<String, Object>> allEvents = new ArrayList<>();
+        Map<String, String> versionByCode = new LinkedHashMap<>();
         for (String code : matchCodes) {
             YamlConfiguration yml = plugin.getRepo().loadMatchYaml(code);
             if (yml == null) continue;
+            versionByCode.put(code, recordedVersion(yml));
             List<Map<String, Object>> evs = MatchYamlCodec.readRawEvents(yml);
             // Tag each event with its match code for the combined output
             for (Map<String, Object> ev : evs) {
@@ -375,6 +408,7 @@ public final class MatchExporter {
              PrintWriter out = new PrintWriter(w)) {
 
             out.println("# match_codes: " + String.join(", ", matchCodes));
+            out.println("# matchbook_versions: " + joinVersions(versionByCode));
             out.println("match,offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,"
                     + "killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating");
 

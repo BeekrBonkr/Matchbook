@@ -151,6 +151,8 @@ Running `/mb export <matchcode>` creates two files in `plugins/MBedwars/add-ons/
 One row per participant with their stat diffs for that match.
 
 ```csv
+# match_codes: AB12
+# matchbook_version: 0.6.10
 uuid,username,team,kills,final_kills,deaths,final_deaths,beds_destroyed,wins,loses
 ...
 ```
@@ -160,12 +162,16 @@ uuid,username,team,kills,final_kills,deaths,final_deaths,beds_destroyed,wins,los
 One row per event in chronological order.
 
 ```csv
+# match: AB12
+# matchbook_version: 0.6.10
 offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating
 0,1751234567,MATCH_START,,,,,,,,false,,false
 13,1751234580,PLAYER_JOIN,Steve,<uuid>,RED,,,,,false,,false
 58,1751234625,PLAYER_KILL,Alex,<uuid>,BLUE,Steve,<uuid>,RED,,true,ENTITY_ATTACK,false
 ...
 ```
+
+`matchbook_version` is the Matchbook version that **recorded** the match (captured when the match session was created and stored with the match), not the version doing the export. Matches recorded before 0.6.10 show `unknown`. Multi-match exports print `# matchbook_versions:` instead — a single value when all matches were recorded by the same build, otherwise `code=version` pairs.
 
 `cause` is the Bukkit damage cause (e.g. `FALL`, `VOID`, `ENTITY_ATTACK`, `PROJECTILE`) and is only populated for `PLAYER_DEATH`/`PLAYER_KILL` rows when MBedwars/Bukkit exposed one. `was_spectating` is `true` on a `PLAYER_LEAVE` row when the player had already been eliminated and was spectating at the moment they left.
 

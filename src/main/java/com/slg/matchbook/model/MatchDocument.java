@@ -18,6 +18,8 @@ public record MatchDocument(
         long startUnix,
         long endUnix,
         String result,
+        /** Matchbook version that recorded the match (captured at session creation, not at export). */
+        String matchbookVersion,
         Long startSnapshotTakenUnix,
         List<UUID> participants,
         List<UUID> spectators,
@@ -157,6 +159,7 @@ public record MatchDocument(
                 session.startUnix,
                 endUnix,
                 result != null ? result : "UNKNOWN",
+                session.matchbookVersion,
                 session.startSnapshotTakenUnix,
                 List.copyOf(participants),
                 List.copyOf(spectators),

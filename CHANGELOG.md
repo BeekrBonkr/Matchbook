@@ -2,6 +2,17 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.6.10] — 2026-07-19
+
+**Exports now show which Matchbook version recorded the match.**
+- The Matchbook version is captured when the match session is created and persisted in the match document (`match.matchbook_version`), so it reflects the build that *recorded* the data — never the build that happens to be running when someone exports it later.
+- All four CSV export variants print it in the header: single stats and single events exports get `# matchbook_version: <v>`; combined exports get `# matchbook_versions:` with one shared value, or `code=version` pairs when the matches were recorded by different builds.
+- Matches saved by older builds (which never stored the field) export as `unknown`.
+
+**Investigated: report of 12 final kills in a match with only 11 possible (`z8xy-y8hg`).**
+- The event log shows only 10 credited final kills (plus one uncredited void death), yet the stats CSV shows 12: one player's entire row (9 kills / 4 deaths / 2 final kills) is a verbatim carry-over of their totals from the immediately preceding round (`z4qf-8rpf`) on the same arena — they recorded zero kills in `z8xy-y8hg`'s own event log. This is the back-to-back-round session-reuse corruption already fixed in 0.6.9; the affected matches were confirmed recorded on 0.6.7. Environmental kills are not double-credited — no code change needed.
+- Since the reviewed exports predate the fixes, the 0.6.8/0.6.9 fixes were re-verified by execution against this release's compiled classes with a standalone harness driving the real lifecycle code: ended-session eviction (no stat/participant/event carry-over between back-to-back rounds), duplicate `RoundEnd` no-op, mid-match team overflow floored at 2nd, and a replay of the `z4qf-8rpf` tie scenario (eliminated teams keep 4th/3rd; only the genuinely tied teams get `matchbook:ties`) — 20/20 checks passed.
+
 ## [0.6.9] — 2026-07-17
 
 Stability release. A full code audit was run with a deterministic simulation harness that drives the real match-lifecycle code (virtual scheduler, simulated players/arenas, injectable stat-callback lag) through 18 hostile scenarios — ties, ragequits, rejoins, team switches, duplicate events, arena restarts, storage outages, and multithreaded stress. Four bugs were reproduced and fixed, plus three more found by inspection.

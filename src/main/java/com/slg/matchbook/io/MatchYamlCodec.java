@@ -37,6 +37,9 @@ public final class MatchYamlCodec {
         yml.set("match.end_unix", doc.endUnix());
         yml.set("match.arena", doc.arenaName());
         yml.set("match.result", doc.result());
+        if (doc.matchbookVersion() != null && !doc.matchbookVersion().isBlank()) {
+            yml.set("match.matchbook_version", doc.matchbookVersion());
+        }
         yml.set("match.start_snapshot_taken_unix", doc.startSnapshotTakenUnix());
         if (doc.tiedTeams() != null && !doc.tiedTeams().isEmpty()) {
             yml.set("match.tied_teams", doc.tiedTeams());

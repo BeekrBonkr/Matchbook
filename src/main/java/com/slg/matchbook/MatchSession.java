@@ -28,6 +28,12 @@ public final class MatchSession {
     public final String matchId;
 
     /**
+     * Matchbook version running when this session was created. Persisted with the match record so
+     * exports can attribute data to the build that recorded it (not the build that exported it).
+     */
+    public final String matchbookVersion;
+
+    /**
      * True once RoundStartEvent has actually fired for this session (not just the early session
      * created on first join). Used to suppress pre-match join/leave events — nobody wants a lobby
      * full of PLAYER_JOIN/PLAYER_LEAVE noise in the match's event log before the game even started.
@@ -124,10 +130,11 @@ public final class MatchSession {
     // Deduplicates join events when both PlayerJoinArenaEvent and SpectatorJoinArenaEvent fire.
     private final Set<UUID> joinEventLogged = ConcurrentHashMap.newKeySet();
 
-    public MatchSession(String matchId, String arenaName, long startUnix) {
+    public MatchSession(String matchId, String arenaName, long startUnix, String matchbookVersion) {
         this.matchId = matchId;
         this.arenaName = arenaName;
         this.startUnix = startUnix;
+        this.matchbookVersion = matchbookVersion;
     }
 
     public void addParticipant(UUID uuid) {

@@ -169,7 +169,8 @@ public final class MatchLifecycleService {
     private MatchSession liveSessionOrNew(String arenaName) {
         while (true) {
             MatchSession session = sessionsByArena.computeIfAbsent(arenaName, __ ->
-                    new MatchSession(MatchIdUtil.newMatchId(), arenaName, System.currentTimeMillis() / 1000L));
+                    new MatchSession(MatchIdUtil.newMatchId(), arenaName, System.currentTimeMillis() / 1000L,
+                            plugin.getDescription().getVersion()));
             if (session.endUnix == null) return session;
             sessionsByArena.remove(arenaName, session);
         }

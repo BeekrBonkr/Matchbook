@@ -152,7 +152,7 @@ One row per participant with their stat diffs for that match.
 
 ```csv
 # match_codes: AB12
-# matchbook_version: 0.6.10
+# matchbook_version: 0.7.0
 uuid,username,team,kills,final_kills,deaths,final_deaths,beds_destroyed,wins,loses
 ...
 ```

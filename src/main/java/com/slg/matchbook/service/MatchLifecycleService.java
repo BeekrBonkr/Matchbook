@@ -751,10 +751,19 @@ public final class MatchLifecycleService {
 
         String causeName = cause != null ? cause.name() : null;
 
+        // If the kill event for this death already arrived, merge its attribution into this row.
+        long ts = now();
+        MatchSession.PendingKill kill = session.consumePendingKill(uuid, ts);
+        MatchEvent deathEvent = MatchEvent.playerDeath(ts, uuid.toString(), victim.getName(),
+                team != null ? team.name() : null, fatalDeath || (kill != null && kill.finalKill()), causeName,
+                kill != null ? kill.killerUuid() : null,
+                kill != null ? kill.killerName() : null,
+                kill != null ? kill.killerTeam() : null,
+                kill != null ? kill.killCause() : null);
+
         if (!countingDeathStats) {
             // Still log the event but skip stat increment.
-            session.addEvent(MatchEvent.playerDeath(now(), uuid.toString(), victim.getName(),
-                    team != null ? team.name() : null, fatalDeath, causeName));
+            session.addEvent(deathEvent);
             if (fatalDeath && team != null) {
                 session.markPlayerFinalDead(team, uuid);
                 maybeMarkTeamEliminated(arena, session, team);
@@ -763,8 +772,7 @@ public final class MatchLifecycleService {
         }
 
         session.addTriggerIncrement(uuid, "bedwars:deaths", 1L);
-        session.addEvent(MatchEvent.playerDeath(now(), uuid.toString(), victim.getName(),
-                team != null ? team.name() : null, fatalDeath, causeName));
+        session.addEvent(deathEvent);
         if (fatalDeath) {
             session.addTriggerIncrement(uuid, "bedwars:final_deaths", 1L);
 
@@ -791,9 +799,18 @@ public final class MatchLifecycleService {
 
         session.addTriggerIncrement(uuid, "bedwars:kills", 1L);
         String victimName = victim != null ? victim.getName() : null;
-        session.addEvent(MatchEvent.playerKill(now(), uuid.toString(), killer.getName(),
-                killerTeam != null ? killerTeam.name() : null, victimName, fatalDeath,
-                cause != null ? cause.name() : null));
+        MatchSession.PendingKill attribution = new MatchSession.PendingKill(now(), uuid.toString(),
+                killer.getName(), killerTeam != null ? killerTeam.name() : null, fatalDeath,
+                cause != null ? cause.name() : null, victimName);
+        if (victim != null) {
+            // Merged into the victim's PLAYER_DEATH row (whichever of the two events lands first).
+            session.attributeKill(victim.getUniqueId(), attribution);
+        } else {
+            // No victim handle to match a death row against — keep the legacy standalone row.
+            session.addEvent(MatchEvent.playerKill(attribution.timestamp(), attribution.killerUuid(),
+                    attribution.killerName(), attribution.killerTeam(), victimName, fatalDeath,
+                    attribution.killCause()));
+        }
         if (fatalDeath) {
             session.addTriggerIncrement(uuid, "bedwars:final_kills", 1L);
         }

@@ -150,6 +150,9 @@ public record MatchDocument(
             players.put(u, new PlayerEntry(u, username, team, startTaken, start, end, diff));
         }
 
+        // Kill attributions that never found their death row become legacy PLAYER_KILL rows
+        // instead of being dropped (idempotent; safe if fromSession runs more than once).
+        session.flushPendingKills();
         List<MatchEvent> events = session.getEvents();
         List<String> tiedTeams = tiedTeamNames;
 

@@ -130,6 +130,20 @@ public final class MatchSession {
     // Deduplicates join events when both PlayerJoinArenaEvent and SpectatorJoinArenaEvent fire.
     private final Set<UUID> joinEventLogged = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Max seconds between a death row and its kill event for them to be considered the same death.
+     * MBedwars fires both for the same death within the same tick (or the next, when one side
+     * arrives async); the window is generous so scheduler lag can't split a pair, but small enough
+     * that an attribution can never bleed into the victim's NEXT respawn death.
+     */
+    private static final long KILL_MERGE_WINDOW_SECONDS = 10L;
+
+    /** Kill attribution that arrived before its matching death row (see attributeKill). */
+    public record PendingKill(long timestamp, String killerUuid, String killerName, String killerTeam,
+                              boolean finalKill, String killCause, String victimName) {}
+
+    private final ConcurrentMap<UUID, PendingKill> pendingKills = new ConcurrentHashMap<>();
+
     public MatchSession(String matchId, String arenaName, long startUnix, String matchbookVersion) {
         this.matchId = matchId;
         this.arenaName = arenaName;
@@ -411,6 +425,62 @@ public Set<UUID> getParticipants() {
     public List<MatchEvent> getEvents() {
         synchronized (events) {
             return new ArrayList<>(events);
+        }
+    }
+
+    /**
+     * Records who MBedwars attributed a death to, merging it into the victim's PLAYER_DEATH row.
+     *
+     * The death and kill events fire separately and in no guaranteed order, so:
+     *  - if the victim's death row is already logged (and unattributed, within the merge window),
+     *    it is amended in place — one row per death, killer columns filled in;
+     *  - otherwise the attribution is parked and consumed when the death row gets logged
+     *    (see consumePendingKill), or flushed as a legacy PLAYER_KILL row at save time if no
+     *    death ever matches (flushPendingKills) so the kill is never silently dropped.
+     */
+    public void attributeKill(UUID victimUuid, PendingKill kill) {
+        if (victimUuid == null || kill == null) return;
+        String victimUuidStr = victimUuid.toString();
+        synchronized (events) {
+            for (int i = events.size() - 1; i >= 0; i--) {
+                MatchEvent ev = events.get(i);
+                if (kill.timestamp() - ev.timestamp() > KILL_MERGE_WINDOW_SECONDS) break;
+                if (ev.type() != MatchEvent.EventType.PLAYER_DEATH) continue;
+                if (!victimUuidStr.equals(ev.playerUuid())) continue;
+                if (ev.killerUuid() != null || ev.killerName() != null) continue; // already attributed
+                events.set(i, ev.withKiller(kill.killerUuid(), kill.killerName(), kill.killerTeam(),
+                        kill.finalKill(), kill.killCause()));
+                return;
+            }
+        }
+        pendingKills.put(victimUuid, kill);
+    }
+
+    /** Takes a parked kill attribution for this victim if one exists within the merge window. */
+    public PendingKill consumePendingKill(UUID victimUuid, long deathTimestamp) {
+        if (victimUuid == null) return null;
+        PendingKill kill = pendingKills.remove(victimUuid);
+        if (kill == null) return null;
+        if (Math.abs(deathTimestamp - kill.timestamp()) > KILL_MERGE_WINDOW_SECONDS) return null;
+        return kill;
+    }
+
+    /**
+     * Converts any never-matched kill attributions into legacy PLAYER_KILL rows (inserted in
+     * timestamp order) so the kill survives in the record. Called at save time; idempotent.
+     */
+    public void flushPendingKills() {
+        for (var entry : pendingKills.entrySet()) {
+            PendingKill k = entry.getValue();
+            if (pendingKills.remove(entry.getKey(), k)) {
+                MatchEvent ev = MatchEvent.playerKill(k.timestamp(), k.killerUuid(), k.killerName(),
+                        k.killerTeam(), k.victimName(), k.finalKill(), k.killCause());
+                synchronized (events) {
+                    int at = events.size();
+                    while (at > 0 && events.get(at - 1).timestamp() > ev.timestamp()) at--;
+                    events.add(at, ev);
+                }
+            }
         }
     }
 

@@ -110,6 +110,7 @@ public final class MatchYamlCodec {
                 if (ev.isFinal())             m.put("final", true);
                 if (ev.deathCause() != null)  m.put("cause", ev.deathCause());
                 if (ev.wasSpectating())       m.put("was_spectating", true);
+                if (ev.killCause() != null)   m.put("kill_cause", ev.killCause());
                 eventList.add(m);
             }
             yml.set("events", eventList);

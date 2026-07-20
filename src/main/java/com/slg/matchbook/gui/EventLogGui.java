@@ -183,22 +183,31 @@ public final class EventLogGui implements Listener {
         String team = str(ev, "player_team", "");
         boolean fatal = bool(ev, "final");
         String cause = str(ev, "cause", "");
+        // Since 0.7.0 attribution lives on the death row itself (older matches carry it in a
+        // separate PLAYER_KILL row, rendered by playerKillItem).
+        String killer = str(ev, "killer_name", "");
+        String killerTeam = str(ev, "killer_team", "");
+        String killCause = str(ev, "kill_cause", "");
 
         Material mat = fatal ? Material.WITHER_SKELETON_SKULL : Material.SKELETON_SKULL;
         ItemStack it = new ItemStack(mat);
         ItemMeta meta = it.getItemMeta();
 
-        if (fatal) {
-            meta.setDisplayName(ChatColor.DARK_RED + "☠ " + ChatColor.WHITE + name
-                    + teamSuffix(team) + ChatColor.DARK_GRAY + " was eliminated");
-        } else {
-            meta.setDisplayName(ChatColor.RED + "☠ " + ChatColor.WHITE + name
-                    + teamSuffix(team) + ChatColor.DARK_GRAY + " died");
+        String display = (fatal ? ChatColor.DARK_RED : ChatColor.RED) + "☠ " + ChatColor.WHITE + name
+                + teamSuffix(team) + ChatColor.DARK_GRAY + (fatal ? " was eliminated" : " died");
+        if (!killer.isBlank()) {
+            display += ChatColor.DARK_GRAY + " by " + ChatColor.GRAY + killer + teamSuffix(killerTeam);
         }
+        meta.setDisplayName(display);
+
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + "At: " + ChatColor.WHITE + timeLabel);
         lore.add(ChatColor.GRAY + "Type: " + (fatal ? ChatColor.DARK_RED + "Final death" : ChatColor.GRAY + "Regular death"));
         if (!cause.isBlank()) lore.add(ChatColor.GRAY + "Cause: " + ChatColor.WHITE + formatCause(cause));
+        if (!killer.isBlank()) {
+            lore.add(ChatColor.GRAY + "Credited to: " + ChatColor.WHITE + killer
+                    + (killCause.isBlank() ? "" : ChatColor.GRAY + " (" + formatCause(killCause) + ")"));
+        }
         meta.setLore(lore);
         it.setItemMeta(meta);
         return it;

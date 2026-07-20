@@ -2,6 +2,16 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.7.0] — 2026-07-19
+
+**Deaths and kill attribution are now one event row.**
+- Previously every attributed death produced two separate rows — a `PLAYER_DEATH` for the victim and a `PLAYER_KILL` for the credited killer — and connecting them (e.g. "was this void death actually credited to anyone?") meant eyeballing adjacent rows. A death row now carries everything about that death: victim, how they died (`cause`, e.g. `VOID`), the responsible player MBedwars attributed it to (`killer_name`/`killer_uuid`/`killer_team`, empty when nobody was credited), and a new `kill_cause` column for how the killer contributed (e.g. `ENTITY_ATTACK` when they punched the victim into the void, `ENTITY_EXPLOSION` for TNT knockback).
+- A void/fall death with empty killer columns is now unambiguously an unattributed environmental death.
+- The in-game event log GUI shows the same merged line ("X [RED] was eliminated by Y [BLUE]", with the kill cause in the lore); the death and kill events arrive from MBedwars separately and in no guaranteed order, so Matchbook pairs them internally (amend-in-place when the kill lands second, parked-and-consumed when it lands first, within a 10s window keyed by victim so an attribution can never bleed into the victim's next death).
+- **Backward compatible with existing databases:** old match documents keep their separate `PLAYER_DEATH`/`PLAYER_KILL` rows and render/export exactly as before — nothing is migrated or rewritten. `PLAYER_KILL` also remains as a rare fallback in new recordings when a kill can't be matched to a death row (e.g. no victim handle), so no kill is ever dropped.
+- Events CSV exports gain the `kill_cause` column (last column; empty for legacy rows). Stat counting is unchanged — this only restructures the event log.
+- Verified by execution against the compiled release (standalone harness driving the real lifecycle code): kill-then-death merge, death-then-kill amend-in-place, clean void death staying unattributed, unmatched-kill flush to a legacy row, stat counters unaffected, and YAML round-trip of the merged row — plus the full 0.6.8–0.6.10 regression suite, 28/28 passed.
+
 ## [0.6.10] — 2026-07-19
 
 **Exports now show which Matchbook version recorded the match.**

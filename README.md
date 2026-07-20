@@ -163,17 +163,19 @@ One row per event in chronological order.
 
 ```csv
 # match: AB12
-# matchbook_version: 0.6.10
-offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating
-0,1751234567,MATCH_START,,,,,,,,false,,false
-13,1751234580,PLAYER_JOIN,Steve,<uuid>,RED,,,,,false,,false
-58,1751234625,PLAYER_KILL,Alex,<uuid>,BLUE,Steve,<uuid>,RED,,true,ENTITY_ATTACK,false
+# matchbook_version: 0.7.0
+offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating,kill_cause
+0,1751234567,MATCH_START,,,,,,,,false,,false,
+13,1751234580,PLAYER_JOIN,Steve,<uuid>,RED,,,,,false,,false,
+58,1751234625,PLAYER_DEATH,Alex,<uuid>,BLUE,Steve,<uuid>,RED,,true,VOID,false,ENTITY_ATTACK
 ...
 ```
 
 `matchbook_version` is the Matchbook version that **recorded** the match (captured when the match session was created and stored with the match), not the version doing the export. Matches recorded before 0.6.10 show `unknown`. Multi-match exports print `# matchbook_versions:` instead — a single value when all matches were recorded by the same build, otherwise `code=version` pairs.
 
-`cause` is the Bukkit damage cause (e.g. `FALL`, `VOID`, `ENTITY_ATTACK`, `PROJECTILE`) and is only populated for `PLAYER_DEATH`/`PLAYER_KILL` rows when MBedwars/Bukkit exposed one. `was_spectating` is `true` on a `PLAYER_LEAVE` row when the player had already been eliminated and was spectating at the moment they left.
+A `PLAYER_DEATH` row is the complete record of one death: the victim (`player_*`), how they died (`cause` — the Bukkit damage cause, e.g. `FALL`, `VOID`, `ENTITY_ATTACK`, `PROJECTILE`), and the responsible player MBedwars credited (`killer_*`). `kill_cause` shows how that player contributed — the example row above reads "Alex fell into the void after being hit by Steve, and it was a final kill". Empty killer columns on a void/fall death mean nobody was credited: a genuine environmental death. `was_spectating` is `true` on a `PLAYER_LEAVE` row when the player had already been eliminated and was spectating at the moment they left.
+
+Matches recorded before 0.7.0 log attribution as a separate `PLAYER_KILL` row (killer in `killer_*`, victim name in `player_name`, kill cause in `cause`) near the victim's `PLAYER_DEATH` row. Those matches export and display exactly as before, and `PLAYER_KILL` can still appear (rarely) in new recordings when a kill couldn't be matched to its death row.
 
 For multi-match exports, the events CSV includes an extra `match` column at the start and is sorted chronologically across all matches.
 

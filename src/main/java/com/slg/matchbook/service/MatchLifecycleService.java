@@ -86,6 +86,21 @@ public final class MatchLifecycleService {
     }
 
     /**
+     * Looks up an arena's session, but only if it's still open for mutation (endUnix == null).
+     *
+     * Once RoundEnd sets endUnix, the session is already queued for the end-snapshot/finalize/save
+     * chain — that chain can take several seconds (async stat callbacks under load). Straggler events
+     * that arrive during that window (a delayed kill/death/team-change/quit for a player transitioning
+     * out) must not mutate a match that's already being closed out and saved; they belong to whatever
+     * comes next on this arena, not this one. Event handlers that only ever react to (never create)
+     * a session should look it up through here instead of sessionsByArena directly.
+     */
+    private MatchSession liveSession(String arenaName) {
+        MatchSession session = sessionsByArena.get(arenaName);
+        return (session != null && session.endUnix == null) ? session : null;
+    }
+
+    /**
      * True if this arena is actually hosted (has a loaded game world) on this server instance.
      *
      * MBedwars supports network-wide arena awareness (RemoteArena/RemoteAPI) so that hub servers
@@ -220,6 +235,7 @@ public final class MatchLifecycleService {
             if (team != null) {
                 session.markTeamParticipating(team);
                 session.markPlayerAlive(team, p.getUniqueId());
+                captureMatchStatsBaseline(p.getUniqueId(), session);
             }
 
             cacheMatchId(p.getUniqueId(), arena.getName(), session.matchId);
@@ -302,6 +318,7 @@ public final class MatchLifecycleService {
         // Real participant (team assigned, or already known participant)
         session.promoteToParticipant(uuid, team);
         session.setUsername(uuid, player.getName());
+        captureMatchStatsBaseline(uuid, session);
         if (session.started && session.tryLogJoin(uuid)) {
             String teamName = team != null ? team.name() : null;
             session.addEvent(MatchEvent.playerJoin(now(), player.getUniqueId().toString(), player.getName(), teamName));
@@ -328,7 +345,7 @@ public final class MatchLifecycleService {
 
     public void onArenaWinningTeam(Arena arena, Team winningTeam) {
         if (arena == null) return;
-        MatchSession session = sessionsByArena.get(arena.getName());
+        MatchSession session = liveSession(arena.getName());
         if (session == null) return;
 
         session.winningTeam = winningTeam;
@@ -347,7 +364,7 @@ public final class MatchLifecycleService {
     public void onPlayerQuitArena(Arena arena, Player player, KickReason reason) {
         if (arena == null || player == null) return;
 
-        MatchSession session = sessionsByArena.get(arena.getName());
+        MatchSession session = liveSession(arena.getName());
         if (session == null) return;
 
         UUID uuid = player.getUniqueId();
@@ -400,7 +417,7 @@ public final class MatchLifecycleService {
         }
 
         if (mem != null) {
-            session.putMatchStats(uuid, snapshotFromGameStatsMap(mem.getGameStats()));
+            recordMatchStats(session, uuid, snapshotFromGameStatsMap(mem.getGameStats()));
 
             // Prevent MBedwars rejoin-memory from blocking players joining other arenas.
             if (shouldDisableRejoin(reason)) {
@@ -415,11 +432,12 @@ public final class MatchLifecycleService {
             // quit-time stats via removeMatchStats); guard with the generation so a stale snapshot
             // can't resurrect and freeze their stats at quit-time values.
             long gen = session.getMatchStatsGeneration(uuid);
-            snapshotGameTrackedStats(uuid, snap -> session.putMatchStatsIfGeneration(uuid, snap, gen));
+            snapshotGameTrackedStats(uuid, snap -> recordMatchStatsIfGeneration(session, uuid, snap, gen));
         }
     }
 
-    public void onRoundEnd(Arena arena) {
+    public void onRoundEnd(Arena arena, Collection<Player> winners, Collection<Player> losers,
+                          Collection<QuitPlayerMemory> quitWinners, Collection<QuitPlayerMemory> quitLosers) {
         if (arena == null) return;
 
         MatchSession session = sessionsByArena.get(arena.getName());
@@ -432,12 +450,20 @@ public final class MatchLifecycleService {
 
         session.endUnix = System.currentTimeMillis() / 1000L;
 
-        // Add any remaining online players (still in arena)
-        for (Player p : arena.getPlayers()) {
-            session.addParticipant(p.getUniqueId());
-            session.setUsername(p.getUniqueId(), p.getName());
-            session.setTeam(p.getUniqueId(), resolveTeamFromArena(arena, p.getUniqueId()));
-        }
+        // Roster for the match that just ended, taken directly from RoundEndEvent — NOT from
+        // arena.getPlayers(). arena.getPlayers() reflects live, *current* arena occupancy, which by
+        // the time this handler runs can already include players who queued into this same arena's
+        // NEXT round (auto-requeue, popular arenas). Those players have no team yet; adding them here
+        // used to leak them into this match's document as a participant with an empty team, and any
+        // later live-stats fallback would then read their per-round game-stats object before MBedwars
+        // resets it for their own upcoming round — i.e. their totals from the last time they actually
+        // played this map. RoundEndEvent's winner/loser rosters (plus the offline QuitPlayerMemory
+        // buckets for anyone who already left) are exactly who played THIS round, frozen at the moment
+        // the round actually ended.
+        for (Player p : winners) addRoundEndParticipant(arena, session, p);
+        for (Player p : losers) addRoundEndParticipant(arena, session, p);
+        for (QuitPlayerMemory mem : quitWinners) addRoundEndQuitParticipant(session, mem);
+        for (QuitPlayerMemory mem : quitLosers) addRoundEndQuitParticipant(session, mem);
 
         long delay = plugin.getMatchbookConfig().runtimeSettings().endSnapshotDelayTicks();
 
@@ -739,7 +765,7 @@ public final class MatchLifecycleService {
     public void onIngameDeath(Arena arena, Player victim, boolean fatalDeath, boolean countingDeathStats,
                               EntityDamageEvent.DamageCause cause) {
         if (arena == null || victim == null) return;
-        MatchSession session = sessionsByArena.get(arena.getName());
+        MatchSession session = liveSession(arena.getName());
         if (session == null) return;
 
         UUID uuid = victim.getUniqueId();
@@ -787,7 +813,7 @@ public final class MatchLifecycleService {
     public void onKill(Arena arena, Player killer, Player victim, boolean fatalDeath, boolean countingKillStats,
                        EntityDamageEvent.DamageCause cause) {
         if (arena == null || killer == null || !countingKillStats) return;
-        MatchSession session = sessionsByArena.get(arena.getName());
+        MatchSession session = liveSession(arena.getName());
         if (session == null) return;
 
         UUID uuid = killer.getUniqueId();
@@ -823,7 +849,7 @@ public final class MatchLifecycleService {
      */
     public void onTeamEliminate(Arena arena, Team eliminatedTeam) {
         if (arena == null || eliminatedTeam == null) return;
-        MatchSession session = sessionsByArena.get(arena.getName());
+        MatchSession session = liveSession(arena.getName());
         if (session == null) return;
 
         // Treat as bed-lost even if we missed the bed break event.
@@ -846,7 +872,7 @@ public final class MatchLifecycleService {
      */
     public void onSpectatorJoinExternal(Arena arena, Player player) {
         if (arena == null || player == null) return;
-        MatchSession session = sessionsByArena.get(arena.getName());
+        MatchSession session = liveSession(arena.getName());
         if (session == null) return;
 
         UUID uuid = player.getUniqueId();
@@ -869,7 +895,7 @@ public final class MatchLifecycleService {
      */
     public void onPlayerTeamAssigned(Arena arena, Player player, Team oldTeam, Team newTeam) {
         if (arena == null || player == null) return;
-        MatchSession session = sessionsByArena.get(arena.getName());
+        MatchSession session = liveSession(arena.getName());
         if (session == null) return;
 
         UUID uuid = player.getUniqueId();
@@ -889,12 +915,13 @@ public final class MatchLifecycleService {
         session.setUsername(uuid, player.getName());
         session.markTeamParticipating(newTeam);
         session.markPlayerAlive(newTeam, uuid);
+        captureMatchStatsBaseline(uuid, session);
         cacheMatchId(uuid, arena.getName(), session.matchId);
     }
 
     public void onBedBreak(Arena arena, Player breaker, Team bedTeam) {
         if (arena == null || breaker == null) return;
-        MatchSession session = sessionsByArena.get(arena.getName());
+        MatchSession session = liveSession(arena.getName());
         if (session == null) return;
 
         UUID uuid = breaker.getUniqueId();
@@ -1171,7 +1198,7 @@ public final class MatchLifecycleService {
             }
 
             if (mem != null) {
-                session.putMatchStats(uuid, snapshotFromGameStatsMap(mem.getGameStats()));
+                recordMatchStats(session, uuid, snapshotFromGameStatsMap(mem.getGameStats()));
             }
         }
 
@@ -1188,7 +1215,7 @@ public final class MatchLifecycleService {
             return;
         }
 
-        takeGameSnapshots(remaining, snap -> session.putMatchStats(snap.uuid, snap.snapshot), onComplete);
+        takeGameSnapshots(remaining, snap -> recordMatchStats(session, snap.uuid, snap.snapshot), onComplete);
     }
 
     private void takeSnapshots(Set<UUID> uuids, Consumer<UuidSnapshot> consumer, Runnable onComplete) {
@@ -1277,6 +1304,43 @@ public final class MatchLifecycleService {
 
             consumer.accept(new StatSnapshot(out));
         });
+    }
+
+    /**
+     * Captures this player's current game-stats reading as their matchStats baseline, if one hasn't
+     * already been captured for this match (see {@link MatchSession#putMatchStatsBaselineIfAbsent}).
+     * Called at every point a player becomes a real participant (round-start roster, join, or
+     * mid-match team assignment) so the eventual final matchStats can be reported relative to 0
+     * regardless of what MBedwars' own per-round counter held at that moment.
+     */
+    private void captureMatchStatsBaseline(UUID uuid, MatchSession session) {
+        if (uuid == null || session == null) return;
+        snapshotGameTrackedStats(uuid, snap -> session.putMatchStatsBaselineIfAbsent(uuid, snap));
+    }
+
+    /** Stores a raw game-stats reading as this player's final matchStats, netted against their baseline. */
+    private void recordMatchStats(MatchSession session, UUID uuid, StatSnapshot raw) {
+        if (session == null || uuid == null || raw == null) return;
+        session.putMatchStats(uuid, baselineAdjust(session, uuid, raw));
+    }
+
+    /** Generation-guarded variant of {@link #recordMatchStats} for the async quit-time fallback path. */
+    private void recordMatchStatsIfGeneration(MatchSession session, UUID uuid, StatSnapshot raw, long expectedGeneration) {
+        if (session == null || uuid == null || raw == null) return;
+        session.putMatchStatsIfGeneration(uuid, baselineAdjust(session, uuid, raw), expectedGeneration);
+    }
+
+    /**
+     * Nets a raw game-stats reading against this player's captured baseline (see
+     * matchStatsBaseline's javadoc in MatchSession) so the result is always relative to 0 for this
+     * match. Falls back to the raw reading unchanged if no baseline was captured in time (e.g. an
+     * extremely short round) — that matches the prior, un-baselined behavior rather than discarding
+     * real data.
+     */
+    private StatSnapshot baselineAdjust(MatchSession session, UUID uuid, StatSnapshot raw) {
+        StatSnapshot baseline = session.getMatchStatsBaseline(uuid);
+        if (baseline == null) return raw;
+        return new StatSnapshot(StatSnapshot.diff(baseline, raw));
     }
 
     /**
@@ -1405,7 +1469,25 @@ public final class MatchLifecycleService {
         }.runTaskTimer(plugin, 20L, 20L);
     }
 
-/**
+/** Registers one online RoundEndEvent roster member as a participant of the ending match. */
+    private void addRoundEndParticipant(Arena arena, MatchSession session, Player p) {
+        if (p == null) return;
+        UUID uuid = p.getUniqueId();
+        session.addParticipant(uuid);
+        session.setUsername(uuid, p.getName());
+        session.setTeam(uuid, resolveTeamFromArena(arena, uuid));
+    }
+
+    /** Registers one already-quit RoundEndEvent roster member (QuitPlayerMemory) as a participant. */
+    private void addRoundEndQuitParticipant(MatchSession session, QuitPlayerMemory mem) {
+        if (mem == null) return;
+        UUID uuid = mem.getUniqueId();
+        session.addParticipant(uuid);
+        session.setUsername(uuid, mem.getUsername());
+        session.setTeam(uuid, mem.getTeam());
+    }
+
+    /**
      * Resolve a player's team by checking Arena membership.
      */
     private Team resolveTeamFromArena(Arena arena, UUID uuid) {

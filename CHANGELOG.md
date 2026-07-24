@@ -2,6 +2,17 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.7.1] — 2026-07-24
+
+**Fixed: a recurring "empty team, stats carried over from the last time the map was played" bug — a different bug than the one already fixed in 0.6.9/0.6.10 with the same symptom.**
+- Root cause: `RoundEnd` built the match's final participant list from `arena.getPlayers()` — the arena's *current* occupancy at the moment the handler ran. On arenas where the next round's players queue back in immediately, that live snapshot could already include players who had just joined the lobby for the *next* round and had no team yet. They'd get added to the ending match as a participant with an empty team, and the end-of-match live-stats fallback (safe only for players still "in the arena") would then read their per-round game-stats object before MBedwars reset it for their own upcoming round — i.e. their totals from the last time they actually played that map. This is a distinct mechanism from the 0.6.9 "ended session reused by the next round" bug (which is still fixed and unaffected); it reproduces the identical symptom through the participant-capture step instead.
+- Fixed: `RoundEnd` handling now builds the participant roster from MBedwars' own `RoundEndEvent` winner/loser lists (including the offline `QuitPlayerMemory` buckets for anyone who already left) instead of re-querying live arena occupancy. This is the actual roster of who played the round that just ended, frozen at the moment it ended, regardless of who has since queued back into the same arena.
+- Hardened as defense in depth: every event handler that mutates an in-progress match (kills, deaths, bed breaks, team changes, quits, team-eliminate, winning-team) now refuses to touch a session once it has recorded an end time. A finished match's data can take several seconds to fully snapshot and save (async stat callbacks under load); during that window any straggler event for that arena now belongs to whatever comes next, never to the match already being closed out and saved.
+
+**Hardened: match stats now always start at 0, even if MBedwars' own counter doesn't.**
+- Matchbook prefers MBedwars' per-round ("game") stats over its own start/end diffs, and previously trusted that counter's value at the end of the match as already relative to 0 for that round. That assumption is exactly what the bug above exploited: a player sitting in an arena's next lobby still holds their previous round's final numbers in that same counter until their own next `RoundStart` actually fires.
+- Fixed: Matchbook now captures its own baseline reading of a player's game stats the moment they become a real participant in a match (round-start roster, a late join, or a mid-match team assignment), and reports that match's stats as a diff against it — never the raw counter value. A player whose counter wasn't actually reset when they joined can no longer show up with stats they didn't earn in this match. Harmless when MBedwars' counter is already zero (the normal case): diffing against a 0 baseline reproduces the exact same numbers as before.
+
 ## [0.7.0] — 2026-07-19
 
 **Deaths and kill attribution are now one event row.**

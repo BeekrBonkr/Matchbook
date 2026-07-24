@@ -152,7 +152,7 @@ One row per participant with their stat diffs for that match.
 
 ```csv
 # match_codes: AB12
-# matchbook_version: 0.7.0
+# matchbook_version: 0.7.1
 uuid,username,team,kills,final_kills,deaths,final_deaths,beds_destroyed,wins,loses
 ...
 ```
@@ -163,7 +163,7 @@ One row per event in chronological order.
 
 ```csv
 # match: AB12
-# matchbook_version: 0.7.0
+# matchbook_version: 0.7.1
 offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating,kill_cause
 0,1751234567,MATCH_START,,,,,,,,false,,false,
 13,1751234580,PLAYER_JOIN,Steve,<uuid>,RED,,,,,false,,false,

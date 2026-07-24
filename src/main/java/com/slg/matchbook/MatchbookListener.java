@@ -63,7 +63,7 @@ public final class MatchbookListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onRoundEnd(RoundEndEvent e) {
-        lifecycle.onRoundEnd(e.getArena());
+        lifecycle.onRoundEnd(e.getArena(), e.getWinners(), e.getLosers(), e.getQuitWinners(), e.getQuitLosers());
     }
 
     /**

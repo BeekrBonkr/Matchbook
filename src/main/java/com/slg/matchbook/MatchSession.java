@@ -108,6 +108,20 @@ public final class MatchSession {
     private final ConcurrentMap<UUID, StatSnapshot> matchStats = new ConcurrentHashMap<>();
 
     /**
+     * Each participant's per-round ("game") stats reading, captured the first moment they became a
+     * real participant in THIS match (round-start roster, a late join, or a mid-match team
+     * assignment). MBedwars' own game-stats counters are expected to already read zero at that point,
+     * but that reset can be timing-dependent (e.g. a player sitting in this same arena's next lobby
+     * still holds their previous round's final numbers until their own next RoundStart actually
+     * fires). Final matchStats are stored as a diff against this baseline rather than trusted as an
+     * already-zeroed absolute value, so this match's recorded stats are always relative to 0 for this
+     * player regardless of what MBedwars' counter happened to hold when they joined. Uses
+     * putIfAbsent semantics (see putMatchStatsBaselineIfAbsent) so a mid-match rejoin can never reset
+     * the baseline captured at the player's true first join.
+     */
+    private final ConcurrentMap<UUID, StatSnapshot> matchStatsBaseline = new ConcurrentHashMap<>();
+
+    /**
      * Guards the quit-time stats capture against rejoins. The quit-path fallback snapshot arrives on
      * an async stats callback; if the player rejoins before it lands, removeMatchStats() has already
      * run and the stale quit-time snapshot must not be written afterwards — it would freeze the
@@ -276,6 +290,16 @@ public Set<UUID> getParticipants() {
 
     public StatSnapshot getMatchStats(UUID uuid) {
         return matchStats.get(uuid);
+    }
+
+    /** Records a player's game-stats baseline once — the first call for a given uuid wins (see field javadoc). */
+    public void putMatchStatsBaselineIfAbsent(UUID uuid, StatSnapshot snap) {
+        if (uuid == null || snap == null) return;
+        matchStatsBaseline.putIfAbsent(uuid, snap);
+    }
+
+    public StatSnapshot getMatchStatsBaseline(UUID uuid) {
+        return matchStatsBaseline.get(uuid);
     }
 
     public ConcurrentMap<UUID, StatSnapshot> getAllMatchStats() {

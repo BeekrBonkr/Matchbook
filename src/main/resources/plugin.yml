@@ -1,6 +1,6 @@
 name: Matchbook
 main: com.slg.matchbook.MatchbookPlugin
-version: 0.7.1
+version: 0.7.3
 api-version: "1.21"
 depend: [MBedwars]
 softdepend: [PlaceholderAPI]

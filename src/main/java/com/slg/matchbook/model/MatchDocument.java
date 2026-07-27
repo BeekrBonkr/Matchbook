@@ -78,6 +78,12 @@ public record MatchDocument(
         // a team eliminated earlier in a 3+-team match still lost outright even if two OTHER teams
         // ended up tied for 1st. Must not stamp matchbook:ties on players outside this set.
         List<String> tiedTeamNames = session.getTiedTeamNames();
+        // Teams holding 1st place. A "TIE" result with only ONE team at 1st is not a tie between
+        // anybody — it's a match whose winner MBedwars failed to report (see the reconciliation in
+        // MatchLifecycleService). MatchLifecycleService corrects the result before saving, but the
+        // abort/flush paths build a document without ever finalizing placements, so guard here too:
+        // a team that finished 1st must never be stamped with a loss.
+        List<String> firstPlaceTeamNames = session.getFirstPlaceTeamNames();
 
         for (UUID u : participants) {
             String username = session.getUsername(u);
@@ -130,9 +136,16 @@ public record MatchDocument(
                     // Ties count as neither a win nor a loss — prevent MBedwars values from leaking through.
                     if (diff.containsKey("bedwars:wins")) diff.put("bedwars:wins", 0L);
                     if (diff.containsKey("bedwars:loses")) diff.put("bedwars:loses", 0L);
-                } else if (tie && team != null) {
+                } else if (tie && team != null && !firstPlaceTeamNames.contains(team.name())) {
                     // Match-wide tie between OTHER teams; this team was outright eliminated earlier
                     // and did not tie for anything, so it's still a loss.
+                    //
+                    // Teams that finished 1st are excluded: when a "TIE" result has a single 1st-place
+                    // team, that team didn't lose, it won a match MBedwars didn't report a winner for.
+                    // Stamping it here produced records holding matchbook:1st_place AND bedwars:loses=1
+                    // at the same time. Its win/loss values are left exactly as MBedwars recorded them
+                    // rather than fabricated, since this path only runs for documents built without a
+                    // finalized result.
                     long winsDiff = diff.getOrDefault("bedwars:wins", 0L);
                     long losesDiff = diff.getOrDefault("bedwars:loses", 0L);
                     if (losesDiff == 0L) diff.put("bedwars:loses", 1L);

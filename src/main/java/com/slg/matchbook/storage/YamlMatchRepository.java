@@ -11,8 +11,24 @@ import java.util.*;
 
 public final class YamlMatchRepository implements MatchRepository {
 
+    /**
+     * Sub-folder of matches/ holding recovery copies written when every save attempt failed
+     * (see MatchLifecycleService#writeRecoveryCopy). Quarantined, not indexed: these are records the
+     * configured backend rejected, and mixing them into the authoritative listing would make healthy
+     * and failed data indistinguishable — and would do so only in YAML mode, since the same folder is
+     * invisible when the backend is MySQL. Admins recover them deliberately, guided by the console.
+     */
+    private static final String RECOVERY_DIR = "failed";
+
     private final MatchbookPlugin plugin;
     private final MatchStorage storage;
+
+    /** Day folders under matches/, excluding the recovery quarantine. */
+    private File[] matchDayFolders() {
+        File matchesDir = new File(plugin.getAddonDataFolder(), "matches");
+        if (!matchesDir.exists()) return null;
+        return matchesDir.listFiles(f -> f.isDirectory() && !f.getName().equalsIgnoreCase(RECOVERY_DIR));
+    }
 
     public YamlMatchRepository(MatchbookPlugin plugin) {
         this.plugin = plugin;
@@ -53,12 +69,8 @@ public final class YamlMatchRepository implements MatchRepository {
     public File findMatchFileById(String matchId) {
         if (matchId == null || matchId.isBlank()) return null;
 
-        // Fast path: use user index if it contains a mapping (matchId -> relative path)
-        File matchesDir = new File(plugin.getAddonDataFolder(), "matches");
-        if (!matchesDir.exists()) return null;
-
         // Slow scan: traverse day folders and read match.match_id from each yaml
-        File[] dayDirs = matchesDir.listFiles(File::isDirectory);
+        File[] dayDirs = matchDayFolders();
         if (dayDirs == null) return null;
 
         for (File day : dayDirs) {
@@ -93,9 +105,6 @@ public final class YamlMatchRepository implements MatchRepository {
 
     @Override
     public List<String> listAllMatchIds() {
-        File matchesDir = new File(plugin.getAddonDataFolder(), "matches");
-        if (!matchesDir.exists()) return List.of();
-
         class Entry {
             final String id;
             final long start;
@@ -104,7 +113,7 @@ public final class YamlMatchRepository implements MatchRepository {
 
         List<Entry> entries = new ArrayList<>();
 
-        File[] dayDirs = matchesDir.listFiles(File::isDirectory);
+        File[] dayDirs = matchDayFolders();
         if (dayDirs == null) return List.of();
 
         for (File day : dayDirs) {

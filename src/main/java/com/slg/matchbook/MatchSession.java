@@ -417,13 +417,97 @@ public Set<UUID> getParticipants() {
     }
 
     /**
-     * Freezes the total-team count at (at least) the currently known participating teams.
-     * Should be called once the round-start player roster has been fully processed, so that
-     * placement math has a stable denominator even if {@link #participatingTeams} is still being
-     * populated by late-arriving join/assignment events.
+     * Freezes the total-team count at the number of teams observed on the round-start roster.
+     * Should be called once that roster has been fully processed, so that placement math has a
+     * stable denominator even if {@link #participatingTeams} is still being populated by
+     * late-arriving join/assignment events.
+     *
+     * Takes the observed count explicitly rather than reading {@link #participatingTeams}: that set
+     * accumulates every team any player was EVER on, including lobby-only teams a player picked in
+     * the team selector and then switched away from before the round started. Such a team has no
+     * players when the match actually plays out, but counting it inflates the placement denominator
+     * and makes every elimination worth one place too little (a 3-team match recording 1st/3rd/4th
+     * with the phantom team silently holding 2nd).
      */
-    public void freezeTotalTeams() {
-        frozenTotalTeams = Math.max(frozenTotalTeams, participatingTeams.size());
+    public void freezeTotalTeams(int observedTeamCount) {
+        frozenTotalTeams = Math.max(frozenTotalTeams, observedTeamCount);
+    }
+
+    /**
+     * Removes a team from every piece of placement tracking.
+     *
+     * Used at round end to discard teams that nobody actually finished the match on (see
+     * {@link #freezeTotalTeams(int)}); such a team would otherwise consume a placement rank that no
+     * player owns, leaving a hole in the recorded standings.
+     */
+    public void dropTeam(Team team) {
+        if (team == null) return;
+        participatingTeams.remove(team);
+        alivePlayersByTeam.remove(team);
+        placementByTeam.remove(team);
+        bedLostTeams.remove(team);
+        synchronized (eliminationOrder) {
+            eliminationOrder.remove(team);
+        }
+    }
+
+    /**
+     * Renumbers placements into a contiguous 1..N competition ranking, preserving the order teams
+     * finished in.
+     *
+     * Live elimination tracking derives a place arithmetically from the frozen team count
+     * ({@code totalTeams - eliminationIndex + 1}), so any drift between that count and the number of
+     * teams that actually finish shows up as a gap or a collision in the final standings. This is the
+     * backstop that makes the recorded ranks correct regardless: whatever the raw numbers, the
+     * relative order they express is what gets persisted.
+     *
+     * Ordering: by assigned place, then — for teams that collided on a place because the denominator
+     * was too small — by elimination order, with later eliminations ranking higher and never-eliminated
+     * teams ranking above every eliminated one. Genuine ties (teams that were never eliminated and hold
+     * the same place, e.g. a time-limit draw) keep a shared rank and the next rank skips accordingly,
+     * i.e. standard competition ranking: 1, 1, 3.
+     */
+    public void normalizePlacements() {
+        if (placementByTeam.isEmpty()) return;
+
+        // Team -> 1-based elimination index; absent means "never eliminated".
+        java.util.Map<Team, Integer> eliminatedAt = new java.util.HashMap<>();
+        synchronized (eliminationOrder) {
+            for (int i = 0; i < eliminationOrder.size(); i++) {
+                Team t = eliminationOrder.get(i);
+                if (t != null) eliminatedAt.putIfAbsent(t, i + 1);
+            }
+        }
+
+        // Higher survival score = finished better. Never eliminated outranks every elimination.
+        java.util.function.ToIntFunction<Team> survival =
+                t -> eliminatedAt.getOrDefault(t, Integer.MAX_VALUE);
+
+        List<Team> ranked = new ArrayList<>(placementByTeam.keySet());
+        ranked.sort(java.util.Comparator
+                .comparingInt((Team t) -> placementByTeam.getOrDefault(t, Integer.MAX_VALUE))
+                .thenComparing(survival::applyAsInt, java.util.Comparator.reverseOrder()));
+
+        int rank = 0;
+        int position = 0;
+        Integer prevPlace = null;
+        Integer prevSurvival = null;
+
+        for (Team t : ranked) {
+            int place = placementByTeam.getOrDefault(t, Integer.MAX_VALUE);
+            int surv = survival.applyAsInt(t);
+            position++;
+
+            // Only teams that are genuinely indistinguishable (same place, same elimination status)
+            // share a rank; everything else advances to its own.
+            if (prevPlace == null || place != prevPlace || surv != prevSurvival) {
+                rank = position;
+            }
+
+            placementByTeam.put(t, rank);
+            prevPlace = place;
+            prevSurvival = surv;
+        }
     }
 
     /**
@@ -564,16 +648,22 @@ public Set<UUID> getParticipants() {
         }
     }
 
-    /** Team names currently tied for 1st place (empty unless more than one team holds placement 1). */
-    public List<String> getTiedTeamNames() {
-        long firstPlaceTeams = placementByTeam.values().stream().filter(p -> p != null && p == 1).count();
-        if (firstPlaceTeams <= 1) return List.of();
-
+    /**
+     * Names of every team holding 1st place — exactly one for an outright win, several for a tie,
+     * none if placements were never finalized (an aborted match).
+     */
+    public List<String> getFirstPlaceTeamNames() {
         List<String> out = new ArrayList<>();
         for (var e : placementByTeam.entrySet()) {
             if (e.getValue() != null && e.getValue() == 1 && e.getKey() != null) out.add(e.getKey().name());
         }
         return out;
+    }
+
+    /** Team names currently tied for 1st place (empty unless more than one team holds placement 1). */
+    public List<String> getTiedTeamNames() {
+        List<String> first = getFirstPlaceTeamNames();
+        return first.size() > 1 ? first : List.of();
     }
 
     private static String ordinal(int n) {

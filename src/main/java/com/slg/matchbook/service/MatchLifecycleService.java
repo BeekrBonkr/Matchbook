@@ -101,6 +101,25 @@ public final class MatchLifecycleService {
     }
 
     /**
+     * Captures the session an in-match event belongs to, at the moment the event fires.
+     *
+     * MBedwars can deliver kills, deaths, bed breaks and team eliminations asynchronously, and the
+     * listener has to bounce those onto the main thread before they can touch anything — which lands
+     * them a tick later. Re-resolving the session at that point would ask "what is live NOW", and the
+     * answer for the match-deciding final kill is "nothing": RoundEnd has already run and stamped
+     * endUnix, so {@link #liveSession} returns null and the event is silently discarded.
+     *
+     * Pinning here instead means such an event stays attached to the round it actually happened in.
+     * This is not a loophole in the ended-session guard: a session is only ever pinned while it is
+     * genuinely live, so a straggler that fires AFTER the round ended still resolves to null (or to
+     * the next round's session, where it belongs). Safe to call off the main thread — it reads a
+     * concurrent map and a volatile field.
+     */
+    public MatchSession pinLiveSession(Arena arena) {
+        return arena != null ? liveSession(arena.getName()) : null;
+    }
+
+    /**
      * True if this arena is actually hosted (has a loaded game world) on this server instance.
      *
      * MBedwars supports network-wide arena awareness (RemoteArena/RemoteAPI) so that hub servers
@@ -226,6 +245,9 @@ public final class MatchLifecycleService {
     }
 
     private void captureRoundStartRoster(Arena arena, MatchSession session) {
+        // Teams that actually have a player on them right now — the real field for this round.
+        Set<Team> roundStartTeams = new HashSet<>();
+
         for (Player p : arena.getPlayers()) {
             session.unmarkSpectatorOnly(p.getUniqueId());
             session.addParticipant(p.getUniqueId());
@@ -233,6 +255,7 @@ public final class MatchLifecycleService {
             Team team = resolveTeamFromArena(arena, p.getUniqueId());
             session.setTeam(p.getUniqueId(), team);
             if (team != null) {
+                roundStartTeams.add(team);
                 session.markTeamParticipating(team);
                 session.markPlayerAlive(team, p.getUniqueId());
                 captureMatchStatsBaseline(p.getUniqueId(), session);
@@ -243,7 +266,10 @@ public final class MatchLifecycleService {
 
         // Every team's roster should be known by now; freeze totalTeams() so that a very early
         // elimination can't compute placement against a still-growing, undercounted team set.
-        session.freezeTotalTeams();
+        // Freeze against the teams counted above, NOT session.participatingTeams — that set also
+        // holds teams a player only ever picked in the lobby team selector before switching away,
+        // which are empty by the time the round starts and would inflate every placement.
+        session.freezeTotalTeams(roundStartTeams.size());
     }
 
     public void onPlayerJoinArena(Arena arena, Player player) {
@@ -483,6 +509,15 @@ public final class MatchLifecycleService {
                     // MUST run before placements are baked into matchStats below.
                     inferResultFromRecordedWinStats(session);
 
+                    // Collapse the standings to a contiguous 1..N ranking. Places are derived
+                    // arithmetically from a team count frozen at round start, so any drift between
+                    // that count and the teams that actually finished shows up as a skipped rank
+                    // (or two teams sharing one). Order is preserved; only the numbers are re-seated.
+                    session.normalizePlacements();
+
+                    // Placements are definitive now, so a "TIE" they don't support can be corrected.
+                    reconcileTieWithPlacements(session);
+
                     // Now that placements are definitive, write matchbook:*_place / matchbook:ties.
                     session.applyPlacementsToMatchStats();
 
@@ -539,9 +574,23 @@ public final class MatchLifecycleService {
         }
 
         // Make sure we have a team roster based on participants we've seen.
+        Set<Team> teamsWithPlayers = new HashSet<>();
         for (UUID u : session.getParticipants()) {
             Team t = session.getTeam(u);
-            if (t != null) session.markTeamParticipating(t);
+            if (t != null) {
+                teamsWithPlayers.add(t);
+                session.markTeamParticipating(t);
+            }
+        }
+
+        // Discard teams nobody ended the match on. participatingTeams accumulates every team any
+        // player was ever assigned to, including a team someone picked in the lobby selector and
+        // then switched away from (PlayerTeamChangeEvent fires pre-round too). Such a team has zero
+        // players, but it still falls through the placement loops below and takes a rank — and since
+        // applyPlacementsToMatchStats only stamps ranks onto players, that rank lands on nobody and
+        // the standings come out with a hole in them (the reported "1st, 3rd, 4th, no 2nd").
+        for (Team t : new ArrayList<>(session.participatingTeams)) {
+            if (t != null && !teamsWithPlayers.contains(t)) session.dropTeam(t);
         }
 
         // Detect tie by observing >1 teams still alive at game-over.
@@ -716,6 +765,41 @@ public final class MatchLifecycleService {
         }
     }
 
+    /**
+     * Promotes a "TIE" that the final standings don't actually support into the win it really was.
+     *
+     * A tie means two or more teams finished level at the top. If the standings show exactly one team
+     * at 1st, nobody tied — the match had a clear winner that MBedwars simply didn't report (the same
+     * null-winner quirk {@link #inferResultFromRecordedWinStats} exists for, hit when that method's
+     * bedwars:wins signal is also missing, so it can't rescue the result either).
+     *
+     * Left unreconciled, the sole survivor was written as 1st place AND credited with a loss, because
+     * MatchDocument treats every team outside the tied-for-1st set as an outright loser.
+     *
+     * Deliberately conservative: a genuine tie (more than one team at 1st) is never touched, and a
+     * single-team match — where "1st place" carries no information — is ignored.
+     */
+    private void reconcileTieWithPlacements(MatchSession session) {
+        if (session == null || session.winningTeam != null) return;
+        if (session.result == null || !session.result.equalsIgnoreCase("TIE")) return;
+        if (session.placementByTeam.size() < 2) return;
+
+        List<Team> firstPlace = new ArrayList<>();
+        for (var e : session.placementByTeam.entrySet()) {
+            if (e.getValue() != null && e.getValue() == 1 && e.getKey() != null) firstPlace.add(e.getKey());
+        }
+        if (firstPlace.size() != 1) return;
+
+        Team winner = firstPlace.get(0);
+        session.winningTeam = winner;
+        session.result = "WIN:" + winner.name();
+
+        plugin.getLogger().info("Matchbook: match " + session.matchId + " (arena=" + session.arenaName
+                + ") was reported as a TIE, but only " + winner.name() + " finished 1st out of "
+                + session.placementByTeam.size() + " teams — recording it as a win for " + winner.name()
+                + ". This usually means MBedwars fired its winning-team event without a winner.");
+    }
+
     private Collection<Team> getArenaTeamsSafe(Arena arena, MatchSession session) {
         try {
             Method m = arena.getClass().getMethod("getTeams");
@@ -762,11 +846,9 @@ public final class MatchLifecycleService {
     // Critical stat events (kills/deaths/beds)
     // ----------------------------------------------------------------------
 
-    public void onIngameDeath(Arena arena, Player victim, boolean fatalDeath, boolean countingDeathStats,
-                              EntityDamageEvent.DamageCause cause) {
-        if (arena == null || victim == null) return;
-        MatchSession session = liveSession(arena.getName());
-        if (session == null) return;
+    public void onIngameDeath(Arena arena, MatchSession session, Player victim, boolean fatalDeath,
+                              boolean countingDeathStats, EntityDamageEvent.DamageCause cause) {
+        if (arena == null || victim == null || session == null) return;
 
         UUID uuid = victim.getUniqueId();
         session.unmarkSpectatorOnly(uuid);
@@ -810,11 +892,9 @@ public final class MatchLifecycleService {
         }
     }
 
-    public void onKill(Arena arena, Player killer, Player victim, boolean fatalDeath, boolean countingKillStats,
-                       EntityDamageEvent.DamageCause cause) {
-        if (arena == null || killer == null || !countingKillStats) return;
-        MatchSession session = liveSession(arena.getName());
-        if (session == null) return;
+    public void onKill(Arena arena, MatchSession session, Player killer, Player victim, boolean fatalDeath,
+                       boolean countingKillStats, EntityDamageEvent.DamageCause cause) {
+        if (arena == null || killer == null || session == null || !countingKillStats) return;
 
         UUID uuid = killer.getUniqueId();
         session.unmarkSpectatorOnly(uuid);
@@ -847,10 +927,8 @@ public final class MatchLifecycleService {
      * This is the most reliable placement signal — it fires after both bed destruction
      * and all member deaths have been resolved, regardless of the order events arrive.
      */
-    public void onTeamEliminate(Arena arena, Team eliminatedTeam) {
-        if (arena == null || eliminatedTeam == null) return;
-        MatchSession session = liveSession(arena.getName());
-        if (session == null) return;
+    public void onTeamEliminate(Arena arena, MatchSession session, Team eliminatedTeam) {
+        if (arena == null || eliminatedTeam == null || session == null) return;
 
         // Treat as bed-lost even if we missed the bed break event.
         session.bedLostTeams.add(eliminatedTeam);
@@ -919,10 +997,8 @@ public final class MatchLifecycleService {
         cacheMatchId(uuid, arena.getName(), session.matchId);
     }
 
-    public void onBedBreak(Arena arena, Player breaker, Team bedTeam) {
-        if (arena == null || breaker == null) return;
-        MatchSession session = liveSession(arena.getName());
-        if (session == null) return;
+    public void onBedBreak(Arena arena, MatchSession session, Player breaker, Team bedTeam) {
+        if (arena == null || breaker == null || session == null) return;
 
         UUID uuid = breaker.getUniqueId();
         session.unmarkSpectatorOnly(uuid);
@@ -1054,7 +1130,9 @@ public final class MatchLifecycleService {
             MatchYamlCodec.toYaml(doc).save(out);
             plugin.getLogger().severe("Matchbook: recovery copy written to " + out.getAbsolutePath()
                     + " — once storage is healthy again (see /mb test), this match can be recovered manually "
-                    + "from that file.");
+                    + "from that file. It is NOT listed by /mb all or openable with /mb view until you move "
+                    + "it into a day folder under matches/ (YAML mode) or import it (MySQL mode): the failed/ "
+                    + "folder is quarantine, so rejected records never masquerade as successfully stored ones.");
         } catch (Exception e) {
             plugin.getLogger().severe("Matchbook: FAILED to write a local recovery copy for match "
                     + doc.matchId() + ": " + e.getMessage() + " — this match's data is lost.");

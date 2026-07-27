@@ -32,7 +32,17 @@ public final class MatchStorage {
         return folder;
     }
 
-    public void saveMatchYaml(MatchDocument doc) {
+    /**
+     * Writes the match file and updates each participant's history index.
+     *
+     * Throws on write failure rather than logging and returning: the caller
+     * ({@link com.slg.matchbook.storage.YamlMatchRepository#saveMatch}) is wrapped by the
+     * retry-then-write-a-recovery-copy safety net in MatchLifecycleService#persistMatch, and that net
+     * only engages on an exception. Swallowing the IOException here made a disk-full / permissions /
+     * bad-path failure lose the match outright — no retry, no recovery copy, one log line — which is
+     * exactly the case the net exists for.
+     */
+    public void saveMatchYaml(MatchDocument doc) throws IOException {
         File dayFolder = getDayFolder(new Date(doc.startUnix() * 1000L));
 
         String md5 = md5Hex(doc.arenaName());
@@ -44,26 +54,19 @@ public final class MatchStorage {
         File outFile = new File(dayFolder, fileName);
 
         YamlConfiguration yml = MatchYamlCodec.toYaml(doc);
+        yml.save(outFile);
 
-        try {
-            yml.save(outFile);
-            // Build a RELATIVE path like: "02-05-2026/<filename>.yml"
-            String relative = outFile.getParentFile().getName() + "/" + outFile.getName();
+        plugin.getLogger().info("Matchbook: wrote match file: " + outFile.getAbsolutePath());
 
-            UserMatchIndex index = new UserMatchIndex(plugin);
-            for (UUID u : doc.participants()) {
-                index.addMatchForPlayer(u, doc.matchId(), relative);
-            }
-
-            plugin.getLogger().info("Matchbook: wrote match file: " + outFile.getAbsolutePath());
-        } catch (IOException e) {
-            plugin.getLogger().severe("Failed to save match file " + outFile.getAbsolutePath() + ": " + e.getMessage());
+        // Index updates are best-effort and deliberately NOT part of the save's success contract:
+        // the match document itself is already safely on disk, and failing the save here would send
+        // it through the retry path and rewrite a file that's already correct.
+        // Build a RELATIVE path like: "02-05-2026/<filename>.yml"
+        String relative = outFile.getParentFile().getName() + "/" + outFile.getName();
+        UserMatchIndex index = new UserMatchIndex(plugin);
+        for (UUID u : doc.participants()) {
+            index.addMatchForPlayer(u, doc.matchId(), relative);
         }
-    }
-
-    /** Backwards-compatible helper. */
-    public void saveMatchYaml(MatchSession session, String result) {
-        saveMatchYaml(MatchDocument.fromSession(session, result));
     }
 
     public static String matchIdFrom(long startUnix, String md5FromFilename) {

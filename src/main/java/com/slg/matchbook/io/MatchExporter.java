@@ -50,8 +50,6 @@ public final class MatchExporter {
 
             List<String> participants = yml.getStringList("match.participants");
             for (String uuidStr : participants) {
-                String base = "players." + uuidStr;
-
                 out.println(String.join(",", rowForColumns(columns, yml, uuidStr)));
             }
         }

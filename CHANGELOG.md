@@ -2,6 +2,52 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.7.3] — 2026-07-27
+
+Audit release. A full read of the codebase turned up eleven issues; all are fixed here. No behaviour that was already correct changed, and the 0.7.2 placement fixes are unaffected (re-verified below).
+
+**Fixed: on YAML storage, a failed save lost the match instead of retrying or writing a recovery copy.**
+- `MatchStorage.saveMatchYaml` caught its own `IOException`, logged one line, and returned normally — so `YamlMatchRepository.saveMatch`, despite declaring `throws IOException`, could never actually throw. The retry-three-times-then-write-a-recovery-copy safety net in `persistMatch` only engages on an exception, which meant it was dead code for the default storage backend: a disk-full, permissions, or bad-path failure discarded the match outright. Worse, the per-player history index update sat inside the same swallowed `try`, so the match vanished from `/mb matches` too.
+- Fixed: the write now propagates, so YAML saves get the same retry and `matches/failed/` recovery copy that MySQL saves always had. Index updates are explicitly best-effort and no longer gate the save's success — the document is already safely on disk by then, and failing there would only rewrite a correct file.
+
+**Fixed: a match reported as a tie with only one team in 1st recorded that team as having lost.**
+- Some MBedwars builds fire `ArenaWinningTeamDetermineEvent` with no winner even when a match had one. Matchbook already infers the winner from `bedwars:wins` in that case — but when that stat is missing too, the match stayed marked `TIE` while the standings showed a single team at 1st. `MatchDocument` then treated every team outside the *tied-for-1st* set as an outright loser, producing records holding `matchbook:1st_place` and `bedwars:loses: 1` at the same time.
+- Fixed on two levels: the round-end chain now reconciles a `TIE` that the final standings don't support into the win it actually was (only when exactly one team holds 1st and at least two teams played — a genuine multi-team tie and a degenerate single-team match are both left alone), and `MatchDocument` independently refuses to stamp a loss on any team that finished 1st, covering the abort/shutdown-flush paths that build a document without ever finalizing placements.
+
+**Fixed: `/mb migrate` and `/mb view` blocked the main thread.**
+- `/mb migrate` ran the entire migration inline in the command handler — every match document parsed and a storage round-trip for each. On a few thousand matches that's long enough for the server watchdog to kill the process. It now runs async with progress bounced back to the sender, and refuses to start if another migration is already in flight.
+- `/mb view <code>` validated the match id on the main thread, which in YAML mode walks and parses *every* match file on disk — twice for an id that doesn't exist, because it called `findMatchFileById` again after `loadMatchYaml` had already been through it. Now async, and the redundant second scan is gone.
+
+**Fixed: MySQL match-id collisions silently overwrote the stored match.**
+- Match ids are drawn at random and never checked for uniqueness, and the upsert used a plain `ON DUPLICATE KEY UPDATE` — so two matches drawing the same id meant the older one was quietly replaced.
+- Saving now refuses to overwrite a row belonging to a *different* match (different arena or start time), which routes the new match through the normal retry-and-recovery-copy path: the stored match stays intact, the new one lands in `matches/failed/` as YAML, and the console says exactly what happened. Re-saving the same match (a retry, a migration re-run, the shutdown flush racing the finalize chain) still updates as before.
+- **Match codes are now 5+5 characters** (`8F3KQ-2JDXW`) instead of 4+4. At 4+4 a server accumulating 100k matches had roughly a 0.5% chance of drawing a duplicate; 5+5 takes that to ~5e-6. Existing shorter codes keep working everywhere — nothing parses or validates the length.
+
+**Fixed: in-match events delivered asynchronously by MBedwars could be dropped.**
+- Kills, deaths, bed breaks and team eliminations are bounced onto the main thread when MBedwars fires them async, which lands them a tick later. The handler then asked which session was live *at that point* — and for the match-deciding final kill the answer is "none", because `RoundEnd` had already run. The event was discarded silently.
+- Fixed: the session is now pinned when the event fires and passed through to the handler, so the event stays attached to the round it actually happened in. This is not a hole in the ended-session guard added in 0.7.1 — a session is only ever pinned while genuinely live, so a straggler firing *after* the round ended still resolves to nothing (or to the next round, where it belongs).
+
+**Fixed: a failed MySQL startup leaked its connection pool.** `MySqlMatchRepository#init` builds the HikariCP pool before running schema DDL, so a failure in that DDL left a live pool holding connections for the rest of the server's uptime while `onEnable` silently swapped in the YAML fallback. It's now shut down before the reference is dropped, matching what `/mb reload`'s reconnect already did.
+
+**Hardened: `saveMatch` now rolls back and restores autocommit explicitly** on SQL failure instead of relying on the pool to scrub the connection — matching `importMatchFromYaml`, which already did.
+
+**Changed: `matches/failed/` is quarantine and no longer appears in match listings.** Recovery copies were being enumerated as ordinary matches by `/mb all` and `/mb view` — but only in YAML mode, since the same folder is invisible when the backend is MySQL. Records the backend rejected can no longer masquerade as successfully stored ones; the console message now spells out how to bring one back.
+
+**Cleanup:** removed dead code (`MySqlMatchRepository#buildYamlText`, the unused `MatchStorage#saveMatchYaml(MatchSession, String)` helper, an unused plugin field and local, stale imports), and fixed `parseMatchCodes` splitting on `"[,\s]+"` — since Java 15 `\s` in a string literal is the escape for a *literal space*, so that pattern silently meant `[, ]+` and wouldn't split on a tab.
+
+**Verified by execution** against the compiled release (standalone harnesses driving the real `MatchSession`/`MatchDocument`/`MatchIdUtil` code): tie-reconciled-into-a-win end to end, the abort/flush path refusing to stamp 1st place with a loss, a genuine tie left untouched, a single-team match not promoted, save-failure propagation, the pinned-session signatures, id format and 200k-id uniqueness — 29/29 — plus a full re-run of the 0.7.2 placement suite (phantom team, contiguous ranking, denominator collisions, ties, idempotence) — 18/18.
+
+## [0.7.2] — 2026-07-27
+
+**Fixed: team placements skipping a rank — 3- and 4-team matches recording 1st, 3rd and 4th with no 2nd place.**
+- Root cause: a *phantom team*. `PlayerTeamChangeEvent` fires in the pre-round lobby as well as mid-match, so a player using the team selector to pick a team and then switch away left the abandoned team permanently in the session's participating-teams set. That team has no players by the time the round is played, but it was still counted twice over: it inflated the frozen team count that placements are derived from (`place = totalTeams - eliminationIndex + 1`, so every elimination came out one rank too low — 4th and 3rd in a 3-team match), and it then fell through the end-of-match placement loops and took a rank of its own. Because placement keys are only ever stamped onto *players*, the rank the empty team took landed on nobody and simply vanished from the standings — the missing 2nd place.
+- Fixed on three levels:
+  - The round-start team count is now frozen from the teams that actually have a player on the round-start roster, not from every team anyone was ever assigned to.
+  - Teams that no player finished the match on are discarded before placements are computed, so an empty team can no longer occupy a rank.
+  - As a backstop, final standings are collapsed to a contiguous 1..N competition ranking before they're written. Placements are derived arithmetically from a count frozen at round start, so *any* drift between that count and the teams that actually finish would otherwise surface as a skipped rank (count too high) or two teams sharing one (count too low). Ordering is preserved and only the numbers are re-seated: teams are ranked by the place they were assigned, then by elimination order with later eliminations placing higher, which also recovers the correct order when the old arithmetic collapsed two teams onto the same rank.
+- Genuine ties are unaffected: teams that were never eliminated and share a place keep a shared rank and the next rank skips accordingly (1, 1, 3), and tied-for-1st teams still get `matchbook:ties` rather than `matchbook:1st_place`.
+- Verified by execution against the compiled release (standalone harness driving the real `MatchSession` placement code): the reported 3-team-with-phantom scenario now records 1st/2nd/3rd and stamps all three onto players, the same scenario reproduces the 1/3/4 bug on the old logic, 4-team ordering with a phantom team, an undercounted count colliding two teams on 2nd, a genuine tie, an already-correct match left untouched (idempotent), a team whose players all quit keeping its rank, and an unaffected 2-team match — 18/18 checks passed.
+
 ## [0.7.1] — 2026-07-24
 
 **Fixed: a recurring "empty team, stats carried over from the last time the map was played" bug — a different bug than the one already fixed in 0.6.9/0.6.10 with the same symptom.**

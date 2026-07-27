@@ -67,6 +67,9 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
     private final java.util.concurrent.ConcurrentMap<String, CachedIds> tabIdCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final Set<String> tabRefreshInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /** Guards against two admins kicking off overlapping migrations. */
+    private final java.util.concurrent.atomic.AtomicBoolean migrationRunning = new java.util.concurrent.atomic.AtomicBoolean(false);
+
     public MatchbookCommand(MatchbookPlugin plugin) {
         this.plugin = plugin;
         this.exporter = new MatchExporter(plugin);
@@ -155,13 +158,23 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                     return true;
                 }
 
-                // Validate the match exists before opening a GUI that would be empty.
-                if (plugin.getRepo().loadMatchYaml(matchId) == null && plugin.getRepo().findMatchFileById(matchId) == null) {
-                    p.sendMessage(ChatColor.RED + "Match not found: " + ChatColor.WHITE + matchId);
-                    return true;
-                }
-
-                details.openDetails(p, matchId, 0);
+                // Validate the match exists before opening a GUI that would be empty — off the main
+                // thread. In YAML mode this walks and parses every match file on disk, which froze the
+                // server here exactly like the tab-completion path used to. findMatchFileById is not
+                // called separately any more: loadMatchYaml already goes through it in YAML mode (and
+                // always returns null in MySQL mode), so the old second call was a redundant full scan
+                // that only ever ran for ids that don't exist.
+                org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    boolean exists = plugin.getRepo().loadMatchYaml(matchId) != null;
+                    org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (!p.isOnline()) return;
+                        if (!exists) {
+                            p.sendMessage(ChatColor.RED + "Match not found: " + ChatColor.WHITE + matchId);
+                            return;
+                        }
+                        details.openDetails(p, matchId, 0);
+                    });
+                });
                 return true;
             }
 
@@ -262,22 +275,44 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                 }
 
                 String mode = args[1].toLowerCase(Locale.ROOT);
-                try {
-                    if (mode.equals("yaml2mysql") || mode.equals("yaml-to-mysql") || mode.equals("yaml2db")) {
-                        int count = com.slg.matchbook.storage.MigrationService.migrateYamlToMySql(plugin, dryRun);
-                        sender.sendMessage(ChatColor.GREEN + "Migration complete: " + ChatColor.WHITE + count + ChatColor.GREEN + " matches.");
-                    } else if (mode.equals("mysql2yaml") || mode.equals("mysql-to-yaml") || mode.equals("db2yaml")) {
-                        int count = com.slg.matchbook.storage.MigrationService.migrateMySqlToYaml(plugin, dryRun);
-                        sender.sendMessage(ChatColor.GREEN + "Migration complete: " + ChatColor.WHITE + count + ChatColor.GREEN + " matches.");
-                    } else {
-                        sender.sendMessage(ChatColor.RED + "Unknown migrate mode: " + args[1]);
-                        sender.sendMessage(ChatColor.RED + "Usage: /" + label + " migrate yaml2mysql|mysql2yaml [--dry-run]");
-                    }
-                } catch (Exception e) {
-                    sender.sendMessage(ChatColor.RED + "Migration failed: " + e.getMessage());
-                    plugin.getLogger().severe("Matchbook: migration failed: " + e.getMessage());
-                    e.printStackTrace();
+                boolean toMySql = mode.equals("yaml2mysql") || mode.equals("yaml-to-mysql") || mode.equals("yaml2db");
+                boolean toYaml = mode.equals("mysql2yaml") || mode.equals("mysql-to-yaml") || mode.equals("db2yaml");
+
+                if (!toMySql && !toYaml) {
+                    sender.sendMessage(ChatColor.RED + "Unknown migrate mode: " + args[1]);
+                    sender.sendMessage(ChatColor.RED + "Usage: /" + label + " migrate yaml2mysql|mysql2yaml [--dry-run]");
+                    return true;
                 }
+
+                // One migration at a time: two overlapping runs would interleave writes to the same
+                // match files / rows and double-count the reported totals.
+                if (!migrationRunning.compareAndSet(false, true)) {
+                    sender.sendMessage(ChatColor.RED + "A migration is already running. Wait for it to finish.");
+                    return true;
+                }
+
+                sender.sendMessage(ChatColor.GRAY + "Migrating... (this runs async; watch the console for progress)");
+
+                // Off the main thread: a migration parses every match document and does a storage
+                // round-trip for each one. Run inline on a few thousand matches and the server stalls
+                // long enough for the watchdog to kill it.
+                boolean finalDryRun = dryRun;
+                org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    try {
+                        int count = toMySql
+                                ? com.slg.matchbook.storage.MigrationService.migrateYamlToMySql(plugin, finalDryRun)
+                                : com.slg.matchbook.storage.MigrationService.migrateMySqlToYaml(plugin, finalDryRun);
+                        org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
+                                sender.sendMessage(ChatColor.GREEN + "Migration complete: " + ChatColor.WHITE + count
+                                        + ChatColor.GREEN + " matches." + (finalDryRun ? ChatColor.GRAY + " (dry-run — nothing was written)" : "")));
+                    } catch (Exception e) {
+                        plugin.getLogger().log(java.util.logging.Level.SEVERE, "Matchbook: migration failed", e);
+                        org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
+                                sender.sendMessage(ChatColor.RED + "Migration failed: " + e.getMessage()));
+                    } finally {
+                        migrationRunning.set(false);
+                    }
+                });
                 return true;
             }
 
@@ -609,7 +644,9 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
 
     private static List<String> parseMatchCodes(String input) {
         if (input == null) return List.of();
-        String[] parts = input.trim().split("[,\s]+");
+        // NB: "\\s" (the character class), not "\s" — since Java 15 the latter is the escape for a
+        // literal space, so the old pattern silently meant "[, ]+" and wouldn't split on a tab.
+        String[] parts = input.trim().split("[,\\s]+");
 
         Set<String> unique = new LinkedHashSet<>();
         for (String p : parts) {

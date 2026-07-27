@@ -1,11 +1,8 @@
 package com.slg.matchbook.storage;
 
-import com.slg.matchbook.MatchSession;
 import com.slg.matchbook.io.MatchYamlCodec;
 import com.slg.matchbook.model.MatchDocument;
-import com.slg.matchbook.MatchStorage;
 import com.slg.matchbook.MatchbookPlugin;
-import com.slg.matchbook.UserMatchIndex;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -209,38 +206,90 @@ public final class MySqlMatchRepository implements MatchRepository {
 
         try (Connection c = ds.getConnection()) {
             c.setAutoCommit(false);
+            try {
+                assertNotAnIdCollision(c, doc);
 
-            try (PreparedStatement ps = c.prepareStatement(
-                    "INSERT INTO `" + matches + "` (match_id, start_unix, end_unix, arena, result, yaml) "
-                            + "VALUES (?,?,?,?,?,?) "
-                            + "ON DUPLICATE KEY UPDATE end_unix=VALUES(end_unix), result=VALUES(result), yaml=VALUES(yaml)")) {
-                ps.setString(1, doc.matchId());
-                ps.setLong(2, doc.startUnix());
-                ps.setLong(3, endUnix);
-                ps.setString(4, doc.arenaName());
-                ps.setString(5, doc.result() != null ? doc.result() : "UNKNOWN");
-                ps.setString(6, yamlText);
-                ps.executeUpdate();
-            }
-
-            try (PreparedStatement ps = c.prepareStatement(
-                    "INSERT INTO `" + pidx + "` (player_uuid, match_id, username, team) VALUES (?,?,?,?) "
-                            + "ON DUPLICATE KEY UPDATE username=VALUES(username), team=VALUES(team)")) {
-                for (UUID u : doc.participants()) {
-                    MatchDocument.PlayerEntry e = doc.players().get(u);
-                    ps.setString(1, u.toString());
-                    ps.setString(2, doc.matchId());
-                    ps.setString(3, e != null ? e.username() : null);
-                    var t = e != null ? e.team() : null;
-                    ps.setString(4, t != null ? t.name() : null);
-                    ps.addBatch();
+                try (PreparedStatement ps = c.prepareStatement(
+                        "INSERT INTO `" + matches + "` (match_id, start_unix, end_unix, arena, result, yaml) "
+                                + "VALUES (?,?,?,?,?,?) "
+                                + "ON DUPLICATE KEY UPDATE end_unix=VALUES(end_unix), result=VALUES(result), yaml=VALUES(yaml)")) {
+                    ps.setString(1, doc.matchId());
+                    ps.setLong(2, doc.startUnix());
+                    ps.setLong(3, endUnix);
+                    ps.setString(4, doc.arenaName());
+                    ps.setString(5, doc.result() != null ? doc.result() : "UNKNOWN");
+                    ps.setString(6, yamlText);
+                    ps.executeUpdate();
                 }
-                ps.executeBatch();
-            }
 
-            c.commit();
+                try (PreparedStatement ps = c.prepareStatement(
+                        "INSERT INTO `" + pidx + "` (player_uuid, match_id, username, team) VALUES (?,?,?,?) "
+                                + "ON DUPLICATE KEY UPDATE username=VALUES(username), team=VALUES(team)")) {
+                    for (UUID u : doc.participants()) {
+                        MatchDocument.PlayerEntry e = doc.players().get(u);
+                        ps.setString(1, u.toString());
+                        ps.setString(2, doc.matchId());
+                        ps.setString(3, e != null ? e.username() : null);
+                        var t = e != null ? e.team() : null;
+                        ps.setString(4, t != null ? t.name() : null);
+                        ps.addBatch();
+                    }
+                    ps.executeBatch();
+                }
+
+                c.commit();
+            } catch (SQLException e) {
+                // Roll back explicitly and restore autoCommit rather than relying on the pool to
+                // scrub the connection on return (HikariCP does, but importMatchFromYaml already
+                // does this by hand and leaving the two paths inconsistent invites a leak the day
+                // the pool changes).
+                try {
+                    c.rollback();
+                } catch (SQLException ignored) {
+                }
+                throw e;
+            } finally {
+                try {
+                    c.setAutoCommit(true);
+                } catch (SQLException ignored) {
+                }
+            }
         } catch (SQLException e) {
             throw new IOException("MySQL save failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Refuses to write a match whose id is already taken by a <em>different</em> match.
+     *
+     * Match ids are random, not allocated, so two matches can in principle draw the same one. The
+     * upsert above would then quietly overwrite the older match with the newer one — silent,
+     * unrecoverable data loss. Failing instead sends the new match through MatchLifecycleService's
+     * retry-then-recovery-copy path: the existing match stays intact, the new one lands in
+     * matches/failed/ as YAML, and the console says exactly what happened.
+     *
+     * Re-saving the SAME match (a retry after a partial failure, a migration re-run, the shutdown
+     * flush racing the finalize chain) matches on start_unix + arena and updates as before.
+     */
+    private void assertNotAnIdCollision(Connection c, MatchDocument doc) throws SQLException {
+        String matches = prefix + "matches";
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT start_unix, arena FROM `" + matches + "` WHERE match_id=?")) {
+            ps.setString(1, doc.matchId());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return; // id is free
+
+                long existingStart = rs.getLong(1);
+                String existingArena = rs.getString(2);
+                boolean sameMatch = existingStart == doc.startUnix()
+                        && Objects.equals(existingArena, doc.arenaName());
+                if (sameMatch) return;
+
+                throw new SQLException("match id '" + doc.matchId() + "' is already used by a different match"
+                        + " (stored: arena=" + existingArena + " start_unix=" + existingStart
+                        + "; incoming: arena=" + doc.arenaName() + " start_unix=" + doc.startUnix()
+                        + "). Refusing to overwrite the stored match.");
+            }
         }
     }
 
@@ -388,11 +437,6 @@ public final class MySqlMatchRepository implements MatchRepository {
 
             ps.executeBatch();
         }
-    }
-
-    private String buildYamlText(MatchSession session, String result) {
-        // Keep MySQL mode byte-for-byte consistent with YAML mode.
-        return com.slg.matchbook.io.MatchYamlCodec.toYamlString(session, result);
     }
 
     private String s(String a, String b, String def) {

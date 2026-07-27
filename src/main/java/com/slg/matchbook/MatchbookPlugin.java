@@ -30,7 +30,6 @@ public final class MatchbookPlugin extends JavaPlugin {
     private volatile MatchRepository repo;
     private volatile boolean storageReconnecting = false;
 
-    private MatchStorage storage;
     private MatchLifecycleService lifecycle;
     private MatchbookListener listener;
     private MatchesDetailsGui detailsGui;
@@ -170,6 +169,18 @@ public final class MatchbookPlugin extends JavaPlugin {
             this.repo.init();
         } catch (Exception e) {
             getLogger().severe("Matchbook: Storage init failed (" + type + "). Falling back to YAML. " + e.getMessage());
+
+            // Shut the failed backend down before dropping the reference. MySqlMatchRepository#init
+            // builds its HikariCP pool before running schema DDL, so a failure in that DDL (bad
+            // permissions, unreachable mid-init) leaves a live pool holding connections for the rest
+            // of the server's uptime with nothing left pointing at it. reconnectStorage() already
+            // cleans up a rejected candidate this way; this path didn't.
+            try {
+                this.repo.shutdown();
+            } catch (Throwable t) {
+                getLogger().warning("Matchbook: error cleaning up the failed storage backend: " + t.getMessage());
+            }
+
             this.repo = new YamlMatchRepository(this);
             try {
                 this.repo.init();
@@ -178,8 +189,6 @@ public final class MatchbookPlugin extends JavaPlugin {
                         + " — Matchbook will not be able to save or read matches until this is fixed.");
             }
         }
-
-        this.storage = new MatchStorage(this);
 
         this.updateChecker = new UpdateChecker(this);
         this.updateChecker.start();

@@ -72,12 +72,13 @@ public final class MatchbookListener implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onTeamEliminate(TeamEliminateEvent e) {
+        MatchSession session = lifecycle.pinLiveSession(e.getArena());
         if (e.isAsynchronous()) {
             Bukkit.getScheduler().runTask(plugin, () ->
-                    lifecycle.onTeamEliminate(e.getArena(), e.getTeam()));
+                    lifecycle.onTeamEliminate(e.getArena(), session, e.getTeam()));
             return;
         }
-        lifecycle.onTeamEliminate(e.getArena(), e.getTeam());
+        lifecycle.onTeamEliminate(e.getArena(), session, e.getTeam());
     }
 
     /**
@@ -109,12 +110,13 @@ public final class MatchbookListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onIngameDeath(PlayerIngameDeathEvent e) {
         EntityDamageEvent.DamageCause cause = resolveDeathCause(e);
+        MatchSession session = lifecycle.pinLiveSession(e.getArena());
         if (e.isAsynchronous()) {
             Bukkit.getScheduler().runTask(plugin, () ->
-                    lifecycle.onIngameDeath(e.getArena(), e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause));
+                    lifecycle.onIngameDeath(e.getArena(), session, e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause));
             return;
         }
-        lifecycle.onIngameDeath(e.getArena(), e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause);
+        lifecycle.onIngameDeath(e.getArena(), session, e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause);
     }
 
     /**
@@ -124,12 +126,13 @@ public final class MatchbookListener implements Listener {
     public void onKill(PlayerKillPlayerEvent e) {
         Player victim = tryGetVictim(e);
         EntityDamageEvent.DamageCause cause = resolveKillCause(e);
+        MatchSession session = lifecycle.pinLiveSession(e.getArena());
         if (e.isAsynchronous()) {
             Bukkit.getScheduler().runTask(plugin, () ->
-                    lifecycle.onKill(e.getArena(), e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), cause));
+                    lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), cause));
             return;
         }
-        lifecycle.onKill(e.getArena(), e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), cause);
+        lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), cause);
     }
 
     private static Player tryGetVictim(PlayerKillPlayerEvent e) {
@@ -166,14 +169,15 @@ public final class MatchbookListener implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onBedBreak(ArenaBedBreakEvent e) {
+        MatchSession session = lifecycle.pinLiveSession(e.getArena());
         if (e.isAsynchronous()) {
-            Bukkit.getScheduler().runTask(plugin, () -> handleBedBreak(e));
+            Bukkit.getScheduler().runTask(plugin, () -> handleBedBreak(e, session));
             return;
         }
-        handleBedBreak(e);
+        handleBedBreak(e, session);
     }
 
-    private void handleBedBreak(ArenaBedBreakEvent e) {
+    private void handleBedBreak(ArenaBedBreakEvent e, MatchSession session) {
         if (e.getResult() == ArenaBedBreakEvent.Result.CANCEL || !e.isPlayerCaused()) return;
         Player p = e.getPlayer();
         if (p == null) return;
@@ -189,7 +193,7 @@ public final class MatchbookListener implements Listener {
                 if (o instanceof Team t) bedTeam = t;
             } catch (Throwable ignored2) {}
         }
-        lifecycle.onBedBreak(e.getArena(), p, bedTeam);
+        lifecycle.onBedBreak(e.getArena(), session, p, bedTeam);
     }
 
     /**

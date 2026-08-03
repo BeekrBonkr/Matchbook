@@ -146,17 +146,34 @@ public final class MatchSession {
 
     /**
      * Max seconds between a death row and its kill event for them to be considered the same death.
-     * MBedwars fires both for the same death within the same tick (or the next, when one side
-     * arrives async); the window is generous so scheduler lag can't split a pair, but small enough
-     * that an attribution can never bleed into the victim's NEXT respawn death.
+     * Only consulted on the fallback pairing path (no DeathKey available) and as a sanity bound on
+     * identity-keyed amends; the primary pairing is exact via {@link DeathKey}.
      */
     private static final long KILL_MERGE_WINDOW_SECONDS = 10L;
+
+    /**
+     * Identity key linking the two MBedwars events fired for one death. PlayerKillPlayerEvent
+     * extends PlayerIngameDeathEvent and both wrap the same underlying Bukkit PlayerDeathEvent,
+     * so the victim plus that object's identity hash pins a kill event to the exact death it
+     * describes — no time-window guessing, immune to fast-respawn double deaths and to a second
+     * kill overwriting an unmatched first one.
+     */
+    public record DeathKey(UUID victim, int bukkitEventIdentity) {}
 
     /** Kill attribution that arrived before its matching death row (see attributeKill). */
     public record PendingKill(long timestamp, String killerUuid, String killerName, String killerTeam,
                               boolean finalKill, String killCause, String victimName) {}
 
     private final ConcurrentMap<UUID, PendingKill> pendingKills = new ConcurrentHashMap<>();
+
+    /** Unattributed PLAYER_DEATH rows by death key, awaiting a possible kill-event amend. */
+    private final ConcurrentMap<DeathKey, MatchEvent> deathRowsByKey = new ConcurrentHashMap<>();
+
+    /** Deaths whose full row was already written by the kill event (kill arrived first). */
+    private final Set<DeathKey> killLoggedDeaths = ConcurrentHashMap.newKeySet();
+
+    /** Trips once if identity pairing misses and the victim+time fallback catches it. */
+    private final AtomicBoolean identityPairMissWarned = new AtomicBoolean(false);
 
     public MatchSession(String matchId, String arenaName, long startUnix, String matchbookVersion) {
         this.matchId = matchId;
@@ -536,10 +553,60 @@ public Set<UUID> getParticipants() {
         }
     }
 
+    /** Registers a just-logged unattributed death row so a later kill event can amend it exactly. */
+    public void registerDeathRow(DeathKey key, MatchEvent row) {
+        if (key == null || row == null) return;
+        deathRowsByKey.put(key, row);
+    }
+
+    /** Marks a death whose full row was written by the kill event, so the death event skips its own. */
+    public void markKillLoggedDeath(DeathKey key) {
+        if (key != null) killLoggedDeaths.add(key);
+    }
+
+    /** True (once) if the kill event already wrote this death's row. */
+    public boolean consumeKillLoggedDeath(DeathKey key) {
+        return key != null && killLoggedDeaths.remove(key);
+    }
+
     /**
-     * Records who MBedwars attributed a death to, merging it into the victim's PLAYER_DEATH row.
+     * Merges a kill attribution into the exact death row it belongs to, located via the shared
+     * Bukkit PlayerDeathEvent identity (see DeathKey). Falls back to the victim+time scan if the
+     * identity lookup misses — that fallback firing means the two MBedwars events did not wrap the
+     * same Bukkit event, which is worth a (one-time) warning since exact pairing depends on it.
      *
-     * The death and kill events fire separately and in no guaranteed order, so:
+     * @return true if a death row was amended; false means no row exists yet for this death and
+     *         the caller should write the full row itself.
+     */
+    public boolean attributeKillByKey(DeathKey key, PendingKill kill) {
+        if (key == null || kill == null) return false;
+        MatchEvent row = deathRowsByKey.remove(key);
+        if (row != null && kill.timestamp() - row.timestamp() <= KILL_MERGE_WINDOW_SECONDS) {
+            synchronized (events) {
+                for (int i = events.size() - 1; i >= 0; i--) {
+                    if (events.get(i) == row) {
+                        events.set(i, row.withKiller(kill.killerUuid(), kill.killerName(),
+                                kill.killerTeam(), kill.finalKill(), kill.killCause()));
+                        return true;
+                    }
+                }
+            }
+        }
+        if (amendRecentDeathRow(key.victim(), kill)) {
+            if (identityPairMissWarned.compareAndSet(false, true)) {
+                org.bukkit.Bukkit.getLogger().warning("Matchbook: kill/death identity pairing missed in match "
+                        + matchId + "; matched by victim+time fallback instead. Attribution is still recorded,"
+                        + " but please report this — it means MBedwars fired the two death events around"
+                        + " different Bukkit events.");
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Records who MBedwars attributed a death to when no DeathKey is available (no victim handle
+     * or no wrapped Bukkit event) — legacy victim+time pairing:
      *  - if the victim's death row is already logged (and unattributed, within the merge window),
      *    it is amended in place — one row per death, killer columns filled in;
      *  - otherwise the attribution is parked and consumed when the death row gets logged
@@ -548,6 +615,12 @@ public Set<UUID> getParticipants() {
      */
     public void attributeKill(UUID victimUuid, PendingKill kill) {
         if (victimUuid == null || kill == null) return;
+        if (amendRecentDeathRow(victimUuid, kill)) return;
+        pendingKills.put(victimUuid, kill);
+    }
+
+    /** Amends the victim's most recent unattributed death row within the merge window, if any. */
+    private boolean amendRecentDeathRow(UUID victimUuid, PendingKill kill) {
         String victimUuidStr = victimUuid.toString();
         synchronized (events) {
             for (int i = events.size() - 1; i >= 0; i--) {
@@ -558,10 +631,10 @@ public Set<UUID> getParticipants() {
                 if (ev.killerUuid() != null || ev.killerName() != null) continue; // already attributed
                 events.set(i, ev.withKiller(kill.killerUuid(), kill.killerName(), kill.killerTeam(),
                         kill.finalKill(), kill.killCause()));
-                return;
+                return true;
             }
         }
-        pendingKills.put(victimUuid, kill);
+        return false;
     }
 
     /** Takes a parked kill attribution for this victim if one exists within the merge window. */
@@ -578,6 +651,7 @@ public Set<UUID> getParticipants() {
      * timestamp order) so the kill survives in the record. Called at save time; idempotent.
      */
     public void flushPendingKills() {
+        int flushed = 0;
         for (var entry : pendingKills.entrySet()) {
             PendingKill k = entry.getValue();
             if (pendingKills.remove(entry.getKey(), k)) {
@@ -588,7 +662,14 @@ public Set<UUID> getParticipants() {
                     while (at > 0 && events.get(at - 1).timestamp() > ev.timestamp()) at--;
                     events.add(at, ev);
                 }
+                flushed++;
             }
+        }
+        // With identity pairing, kills carrying a DeathKey never park here — a flush now means a
+        // death event genuinely never arrived, which is a capture gap worth surfacing.
+        if (flushed > 0) {
+            org.bukkit.Bukkit.getLogger().warning("Matchbook: " + flushed + " kill(s) in match " + matchId
+                    + " never matched a death event; recorded as standalone PLAYER_KILL rows.");
         }
     }
 

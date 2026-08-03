@@ -110,13 +110,14 @@ public final class MatchbookListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onIngameDeath(PlayerIngameDeathEvent e) {
         EntityDamageEvent.DamageCause cause = resolveDeathCause(e);
+        MatchSession.DeathKey deathKey = resolveDeathKey(e.getPlayer(), e);
         MatchSession session = lifecycle.pinLiveSession(e.getArena());
         if (e.isAsynchronous()) {
             Bukkit.getScheduler().runTask(plugin, () ->
-                    lifecycle.onIngameDeath(e.getArena(), session, e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause));
+                    lifecycle.onIngameDeath(e.getArena(), session, e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause, deathKey));
             return;
         }
-        lifecycle.onIngameDeath(e.getArena(), session, e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause);
+        lifecycle.onIngameDeath(e.getArena(), session, e.getPlayer(), e.isFatalDeath(), e.isCountingDeathStats(), cause, deathKey);
     }
 
     /**
@@ -125,18 +126,39 @@ public final class MatchbookListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKill(PlayerKillPlayerEvent e) {
         Player victim = tryGetVictim(e);
-        EntityDamageEvent.DamageCause cause = resolveKillCause(e);
+        EntityDamageEvent.DamageCause killCause = resolveKillCause(e);
+        // PlayerKillPlayerEvent extends PlayerIngameDeathEvent, so the victim's own death cause is
+        // one hop away too — needed when this event ends up writing the full death row.
+        EntityDamageEvent.DamageCause deathCause = resolveDeathCause(e);
+        MatchSession.DeathKey deathKey = resolveDeathKey(victim, e);
         MatchSession session = lifecycle.pinLiveSession(e.getArena());
         if (e.isAsynchronous()) {
             Bukkit.getScheduler().runTask(plugin, () ->
-                    lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), cause));
+                    lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), killCause, deathCause, deathKey));
             return;
         }
-        lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), cause);
+        lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), killCause, deathCause, deathKey);
     }
 
     private static Player tryGetVictim(PlayerKillPlayerEvent e) {
         try { return e.getPlayer(); } catch (Throwable ignored) { return null; }
+    }
+
+    /**
+     * MBedwars fires PlayerIngameDeathEvent and PlayerKillPlayerEvent around the same wrapped
+     * Bukkit PlayerDeathEvent; victim + that object's identity pins the two to the same death.
+     * Null when either half is unavailable — pairing then falls back to the victim+time heuristic.
+     * Resolved on the firing thread, like the causes, since it reads event-bound state.
+     */
+    private static MatchSession.DeathKey resolveDeathKey(Player victim, PlayerIngameDeathEvent e) {
+        if (victim == null) return null;
+        try {
+            PlayerDeathEvent bukkitEvent = e.getBukkitEvent();
+            if (bukkitEvent == null) return null;
+            return new MatchSession.DeathKey(victim.getUniqueId(), System.identityHashCode(bukkitEvent));
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     /**

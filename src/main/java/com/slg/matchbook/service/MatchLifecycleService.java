@@ -847,7 +847,8 @@ public final class MatchLifecycleService {
     // ----------------------------------------------------------------------
 
     public void onIngameDeath(Arena arena, MatchSession session, Player victim, boolean fatalDeath,
-                              boolean countingDeathStats, EntityDamageEvent.DamageCause cause) {
+                              boolean countingDeathStats, EntityDamageEvent.DamageCause cause,
+                              MatchSession.DeathKey deathKey) {
         if (arena == null || victim == null || session == null) return;
 
         UUID uuid = victim.getUniqueId();
@@ -857,21 +858,23 @@ public final class MatchLifecycleService {
         Team team = resolveTeamFromArena(arena, uuid);
         session.setTeam(uuid, team);
 
-        String causeName = cause != null ? cause.name() : null;
-
-        // If the kill event for this death already arrived, merge its attribution into this row.
-        long ts = now();
-        MatchSession.PendingKill kill = session.consumePendingKill(uuid, ts);
-        MatchEvent deathEvent = MatchEvent.playerDeath(ts, uuid.toString(), victim.getName(),
-                team != null ? team.name() : null, fatalDeath || (kill != null && kill.finalKill()), causeName,
-                kill != null ? kill.killerUuid() : null,
-                kill != null ? kill.killerName() : null,
-                kill != null ? kill.killerTeam() : null,
-                kill != null ? kill.killCause() : null);
+        // The kill event may already have written this death's full row (see onKill); one row per death.
+        if (!session.consumeKillLoggedDeath(deathKey)) {
+            long ts = now();
+            MatchSession.PendingKill kill = session.consumePendingKill(uuid, ts);
+            MatchEvent deathEvent = MatchEvent.playerDeath(ts, uuid.toString(), victim.getName(),
+                    team != null ? team.name() : null, fatalDeath || (kill != null && kill.finalKill()),
+                    cause != null ? cause.name() : null,
+                    kill != null ? kill.killerUuid() : null,
+                    kill != null ? kill.killerName() : null,
+                    kill != null ? kill.killerTeam() : null,
+                    kill != null ? kill.killCause() : null);
+            session.addEvent(deathEvent);
+            if (kill == null) session.registerDeathRow(deathKey, deathEvent);
+        }
 
         if (!countingDeathStats) {
-            // Still log the event but skip stat increment.
-            session.addEvent(deathEvent);
+            // Row is logged either way; only the stat increment is skipped.
             if (fatalDeath && team != null) {
                 session.markPlayerFinalDead(team, uuid);
                 maybeMarkTeamEliminated(arena, session, team);
@@ -880,7 +883,6 @@ public final class MatchLifecycleService {
         }
 
         session.addTriggerIncrement(uuid, "bedwars:deaths", 1L);
-        session.addEvent(deathEvent);
         if (fatalDeath) {
             session.addTriggerIncrement(uuid, "bedwars:final_deaths", 1L);
 
@@ -893,7 +895,8 @@ public final class MatchLifecycleService {
     }
 
     public void onKill(Arena arena, MatchSession session, Player killer, Player victim, boolean fatalDeath,
-                       boolean countingKillStats, EntityDamageEvent.DamageCause cause) {
+                       boolean countingKillStats, EntityDamageEvent.DamageCause killCause,
+                       EntityDamageEvent.DamageCause victimDeathCause, MatchSession.DeathKey deathKey) {
         if (arena == null || killer == null || session == null || !countingKillStats) return;
 
         UUID uuid = killer.getUniqueId();
@@ -907,15 +910,29 @@ public final class MatchLifecycleService {
         String victimName = victim != null ? victim.getName() : null;
         MatchSession.PendingKill attribution = new MatchSession.PendingKill(now(), uuid.toString(),
                 killer.getName(), killerTeam != null ? killerTeam.name() : null, fatalDeath,
-                cause != null ? cause.name() : null, victimName);
-        if (victim != null) {
-            // Merged into the victim's PLAYER_DEATH row (whichever of the two events lands first).
-            session.attributeKill(victim.getUniqueId(), attribution);
-        } else {
+                killCause != null ? killCause.name() : null, victimName);
+        if (victim == null) {
             // No victim handle to match a death row against — keep the legacy standalone row.
             session.addEvent(MatchEvent.playerKill(attribution.timestamp(), attribution.killerUuid(),
                     attribution.killerName(), attribution.killerTeam(), victimName, fatalDeath,
                     attribution.killCause()));
+        } else if (deathKey == null) {
+            // No shared Bukkit event to pair on — legacy victim+time matching.
+            session.attributeKill(victim.getUniqueId(), attribution);
+        } else if (!session.attributeKillByKey(deathKey, attribution)) {
+            // Kill arrived first. PlayerKillPlayerEvent is a complete death record (it extends
+            // PlayerIngameDeathEvent), so write the victim's PLAYER_DEATH row from it directly;
+            // the death event skips row creation when it lands (consumeKillLoggedDeath).
+            UUID victimUuid = victim.getUniqueId();
+            session.addParticipant(victimUuid);
+            session.setUsername(victimUuid, victim.getName());
+            Team victimTeam = resolveTeamFromArena(arena, victimUuid);
+            session.addEvent(MatchEvent.playerDeath(attribution.timestamp(), victimUuid.toString(),
+                    victim.getName(), victimTeam != null ? victimTeam.name() : null, fatalDeath,
+                    victimDeathCause != null ? victimDeathCause.name() : null,
+                    attribution.killerUuid(), attribution.killerName(), attribution.killerTeam(),
+                    attribution.killCause()));
+            session.markKillLoggedDeath(deathKey);
         }
         if (fatalDeath) {
             session.addTriggerIncrement(uuid, "bedwars:final_kills", 1L);

@@ -2,7 +2,17 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
-## [0.7.3] — 2026-07-27
+## [0.7.4] — 2026-08-03
+
+**Fixed: kill attribution now pairs kills to deaths exactly instead of guessing by time.**
+
+MBedwars fires two events for every attributed death — the death itself and the kill — and matchbook has to glue them back together into one event-log row. Until now it did that by guessing: "same victim, within 10 seconds." That guess had real failure modes: a second kill on the same victim inside the window silently overwrote an unmatched first attribution (a kill counted in stats with no event row backing it — the mismatch reported against 0.7.3), and a fast respawn could merge a kill into the wrong one of two nearby deaths.
+
+Both MBedwars events carry the same underlying Bukkit death event, so the two halves are now matched by that shared identity — exact, order-independent, no time window. Additionally:
+
+- **If the kill event arrives first, it now writes the complete death row itself** (it carries the full death context), instead of parking the attribution and hoping the death event shows up to claim it.
+- **The old victim+time matching survives only as a fallback** for the rare case where no shared Bukkit event is available, and a one-time console warning fires if identity pairing ever misses — so if the exact-pairing assumption is ever violated in the wild, it shows up in the console instead of in the data.
+- **Kills that never match a death event now log a console warning at save time.** With exact pairing that situation always indicates a real capture gap, not a timing hiccup, so it is no longer silent.
 
 > ### ⚠️ Match codes are now longer
 >

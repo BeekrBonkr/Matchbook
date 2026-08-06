@@ -111,6 +111,7 @@ public final class MatchYamlCodec {
                 if (ev.deathCause() != null)  m.put("cause", ev.deathCause());
                 if (ev.wasSpectating())       m.put("was_spectating", true);
                 if (ev.killCause() != null)   m.put("kill_cause", ev.killCause());
+                if (ev.statsUncounted())      m.put("stats_uncounted", true);
                 eventList.add(m);
             }
             yml.set("events", eventList);

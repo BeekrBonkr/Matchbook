@@ -36,9 +36,13 @@ import java.util.function.Consumer;
  *  - Players can leave a running match and join a new one before the first match ends.
  *  - Matchbook must NOT attribute stats from the new match to the old match.
  *
- * Approach:
- *  - Prefer MBedwars *per-round* ("game") stats stored on QuitPlayerMemory / PlayerStats#getGameStats.
- *  - Additionally, capture critical stats (kills/deaths/bed breaks) directly from MBedwars events.
+ * Approach (0.7.5+):
+ *  - The recorded event log is the source of truth for exported stats — MatchDocument.fromSession
+ *    derives kills, deaths, final kills/deaths, beds destroyed and beds lost from it directly.
+ *  - MBedwars *per-round* ("game") stats (QuitPlayerMemory / PlayerStats#getGameStats) and the
+ *    event-driven trigger counters are still captured, but only as a diagnostic cross-check
+ *    (stat_mismatch warnings), for custom tracked keys the event log can't derive, and as the
+ *    persistence trigger.
  *
  * This solves:
  *  - Missing death counts
@@ -868,7 +872,8 @@ public final class MatchLifecycleService {
                     kill != null ? kill.killerUuid() : null,
                     kill != null ? kill.killerName() : null,
                     kill != null ? kill.killerTeam() : null,
-                    kill != null ? kill.killCause() : null);
+                    kill != null ? kill.killCause() : null,
+                    !countingDeathStats);
             session.addEvent(deathEvent);
             if (kill == null) session.registerDeathRow(deathKey, deathEvent);
         }
@@ -895,7 +900,8 @@ public final class MatchLifecycleService {
     }
 
     public void onKill(Arena arena, MatchSession session, Player killer, Player victim, boolean fatalDeath,
-                       boolean countingKillStats, EntityDamageEvent.DamageCause killCause,
+                       boolean countingKillStats, boolean countingDeathStats,
+                       EntityDamageEvent.DamageCause killCause,
                        EntityDamageEvent.DamageCause victimDeathCause, MatchSession.DeathKey deathKey) {
         if (arena == null || killer == null || session == null || !countingKillStats) return;
 
@@ -931,7 +937,7 @@ public final class MatchLifecycleService {
                     victim.getName(), victimTeam != null ? victimTeam.name() : null, fatalDeath,
                     victimDeathCause != null ? victimDeathCause.name() : null,
                     attribution.killerUuid(), attribution.killerName(), attribution.killerTeam(),
-                    attribution.killCause()));
+                    attribution.killCause(), !countingDeathStats));
             session.markKillLoggedDeath(deathKey);
         }
         if (fatalDeath) {

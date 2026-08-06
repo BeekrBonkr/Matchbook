@@ -163,17 +163,17 @@ One row per event in chronological order.
 
 ```csv
 # match: 8F3KQ-2JDXW
-# matchbook_version: 0.7.3
-offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating,kill_cause
-0,1751234567,MATCH_START,,,,,,,,false,,false,
-13,1751234580,PLAYER_JOIN,Steve,<uuid>,RED,,,,,false,,false,
-58,1751234625,PLAYER_DEATH,Alex,<uuid>,BLUE,Steve,<uuid>,RED,,true,VOID,false,ENTITY_ATTACK
+# matchbook_version: 0.7.5
+offset_seconds,wall_clock_unix,type,player_name,player_uuid,player_team,killer_name,killer_uuid,killer_team,bed_team,final,cause,was_spectating,kill_cause,stats_uncounted
+0,1751234567,MATCH_START,,,,,,,,false,,false,,false
+13,1751234580,PLAYER_JOIN,Steve,<uuid>,RED,,,,,false,,false,,false
+58,1751234625,PLAYER_DEATH,Alex,<uuid>,BLUE,Steve,<uuid>,RED,,true,VOID,false,ENTITY_ATTACK,false
 ...
 ```
 
 `matchbook_version` is the Matchbook version that **recorded** the match (captured when the match session was created and stored with the match), not the version doing the export. Matches recorded before 0.6.10 show `unknown`. Multi-match exports print `# matchbook_versions:` instead — a single value when all matches were recorded by the same build, otherwise `code=version` pairs.
 
-A `PLAYER_DEATH` row is the complete record of one death: the victim (`player_*`), how they died (`cause` — the Bukkit damage cause, e.g. `FALL`, `VOID`, `ENTITY_ATTACK`, `PROJECTILE`), and the responsible player MBedwars credited (`killer_*`). `kill_cause` shows how that player contributed — the example row above reads "Alex fell into the void after being hit by Steve, and it was a final kill". Empty killer columns on a void/fall death mean nobody was credited: a genuine environmental death. `was_spectating` is `true` on a `PLAYER_LEAVE` row when the player had already been eliminated and was spectating at the moment they left.
+A `PLAYER_DEATH` row is the complete record of one death: the victim (`player_*`), how they died (`cause` — the Bukkit damage cause, e.g. `FALL`, `VOID`, `ENTITY_ATTACK`, `PROJECTILE`), and the responsible player MBedwars credited (`killer_*`). `kill_cause` shows how that player contributed — the example row above reads "Alex fell into the void after being hit by Steve, and it was a final kill". Empty killer columns on a void/fall death mean nobody was credited: a genuine environmental death. `was_spectating` is `true` on a `PLAYER_LEAVE` row when the player had already been eliminated and was spectating at the moment they left. `stats_uncounted` (0.7.5+) is `true` on a `PLAYER_DEATH` row MBedwars flagged as not counting toward the victim's death stats — the row stays in the log, and the stats CSV skips it too, so the two files always reconcile.
 
 Matches recorded before 0.7.0 log attribution as a separate `PLAYER_KILL` row (killer in `killer_*`, victim name in `player_name`, kill cause in `cause`) near the victim's `PLAYER_DEATH` row. Those matches export and display exactly as before, and `PLAYER_KILL` can still appear (rarely) in new recordings when a kill couldn't be matched to its death row.
 
@@ -579,24 +579,31 @@ A match is **only persisted at all** if it has real activity: at least one kill,
 
 ## 6. The stats pipeline
 
-Per-player match stats are the hardest part of the plugin, because MBedwars updates its counters on its own schedule and players can hop between matches. Matchbook uses **three independent sources**, merged in priority order:
+**Since 0.7.5 the recorded event log is the source of truth for exported stats.** At document-build time (`MatchDocument.fromSession`) each player's stats row is derived from the match's own event rows:
 
-| Priority | Source | When captured | Notes |
-|---|---|---|---|
-| 1 | **Per-round "game stats"** (`QuitPlayerMemory.getGameStats()` at quit, or live game stats at round end for players still in the arena) | Quit time / round end | The primary source. Always **diffed against a per-player baseline** (below). |
-| 2 | **Event-driven trigger counters** (`bedwars:kills`, `final_kills`, `deaths`, `final_deaths`, `beds_destroyed`) counted directly from MBedwars events | Live, per event | Backstop: `applyTriggerIncrementsToMatchStats` raises any stat that the snapshot sources under-reported. Also the persistence trigger. |
-| 3 | **Start/end snapshots of career totals** for every tracked key | `start_snapshot_delay_ticks` after round start / `end_snapshot_delay_ticks` after round end | Audit trail (stored as `start`/`end` in the document) and last-resort diff when no game-stats snapshot exists. |
+| Stat | Derived from |
+|---|---|
+| `bedwars:deaths` / `bedwars:final_deaths` | The player's `PLAYER_DEATH` rows (skipping rows MBedwars flagged as not stat-counting — stored as `stats_uncounted` on the row; the row itself stays in the log). |
+| `bedwars:kills` / `bedwars:final_kills` | `PLAYER_DEATH` rows attributing the death to the player, plus legacy standalone `PLAYER_KILL` rows. |
+| `bedwars:beds_destroyed` | The player's `BED_BREAK` rows. |
+| `bedwars:beds_lost` | `BED_BREAK` rows whose `bed_team` is the player's team. |
+| `bedwars:wins` / `bedwars:loses`, `matchbook:*_place`, `matchbook:ties` | The finalized result/placements (section 7), as before. |
 
-Two guards make source 1 safe:
+Every derived key is explicitly present (zeroed) in every row, so stats are always baselined to 0. A teamless participant the event log never mentions is dropped from the document entirely (`phantom_participant_dropped` warning) — that's a roster-capture artifact, not a player.
 
-- **Baselines.** When a player first becomes a real participant, their current game-stats reading is captured once (`putMatchStatsBaselineIfAbsent`). MBedwars is *supposed* to have reset the per-round counter to zero by then, but the reset is timing-dependent (a player sitting in the same arena's next lobby still holds the previous round's numbers). Final stats are stored as `reading − baseline`, so they're always relative to zero regardless. First capture wins — a rejoin can't reset the baseline.
-- **Generation counters.** The quit-time fallback snapshot arrives on an async callback. If the player rejoins before it lands, their stats were invalidated (`removeMatchStats` bumps a generation counter); the stale snapshot only writes if the generation hasn't moved. Otherwise a rejoin would freeze the player's stats at quit-time values forever.
+MBedwars' counters are still captured, but demoted to supporting roles:
 
-Snapshot collection itself is callback-based (MBedwars stats API is async) with a countdown latch and a **timeout** (`snapshot_timeout_ticks`): a player whose callback never arrives can delay the save, not block it.
+| Source | Role today |
+|---|---|
+| **Per-round "game stats"** (`QuitPlayerMemory.getGameStats()` at quit, or live game stats at round end), baseline-diffed and generation-guarded | Diagnostic cross-check: any disagreement with the event-derived value is recorded as a `stat_mismatch` warning in the match document. Also the only source for **custom tracked keys** the event log can't derive. |
+| **Event-driven trigger counters** (`bedwars:kills`, `final_kills`, `deaths`, `final_deaths`, `beds_destroyed`) | Persistence trigger, and folded into the cross-check snapshot (`applyTriggerIncrementsToMatchStats`). |
+| **Start/end snapshots of career totals** for every tracked key | Audit trail (stored as `start`/`end` in the document). |
 
-Finally, at document-build time (`MatchDocument.fromSession`):
+The baseline (`putMatchStatsBaselineIfAbsent`) and generation-counter (`removeMatchStats`) guards on the game-stats capture still apply — see git history for their details; they now protect the cross-check rather than the exported data. Snapshot collection itself is callback-based (MBedwars stats API is async) with a countdown latch and a **timeout** (`snapshot_timeout_ticks`): a player whose callback never arrives can delay the save, not block it.
 
-- Negative diffs are clamped to 0 and recorded in `match.warnings` (they indicate MBedwars reset a counter mid-match).
+Also at document-build time:
+
+- Negative values on snapshot-sourced keys are clamped to 0 and recorded in `match.warnings` (they indicate MBedwars reset a counter mid-match). Event-derived values can't go negative.
 - **Win/loss enforcement** (`enforce_win_loss_from_result`): winners get `wins=1, loses=0`; everyone else `loses=1, wins=0` — from the *match result*, not from whenever MBedwars happened to increment its counters. Tied-for-1st teams get neither (plus `matchbook:ties=1`); in a multi-team match that ended in a tie, teams eliminated earlier still get a loss.
 
 ## 7. Placement & result resolution

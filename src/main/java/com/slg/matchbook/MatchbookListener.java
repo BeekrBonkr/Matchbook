@@ -134,10 +134,10 @@ public final class MatchbookListener implements Listener {
         MatchSession session = lifecycle.pinLiveSession(e.getArena());
         if (e.isAsynchronous()) {
             Bukkit.getScheduler().runTask(plugin, () ->
-                    lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), killCause, deathCause, deathKey));
+                    lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), e.isCountingDeathStats(), killCause, deathCause, deathKey));
             return;
         }
-        lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), killCause, deathCause, deathKey);
+        lifecycle.onKill(e.getArena(), session, e.getKiller(), victim, e.isFatalDeath(), e.isCountingKillStats(), e.isCountingDeathStats(), killCause, deathCause, deathKey);
     }
 
     private static Player tryGetVictim(PlayerKillPlayerEvent e) {

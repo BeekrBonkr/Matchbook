@@ -104,7 +104,11 @@ public final class MatchSession {
     private final ConcurrentMap<UUID, StatSnapshot> startStats = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, StatSnapshot> endStats = new ConcurrentHashMap<>();
 
-    // Per-match stats (prefer this over start/end diffs when available)
+    // Per-match counter snapshot (MBedwars game stats / quit memories, max-merged with trigger
+    // counters). Since 0.7.5 this is NO LONGER the exported truth for event-derivable stats —
+    // MatchDocument derives those from the event log and only uses this as a diagnostic
+    // cross-check (stat_mismatch warnings), for non-derivable custom tracked keys, and as the
+    // carrier for matchbook:*_place / matchbook:ties written by applyPlacementsToMatchStats.
     private final ConcurrentMap<UUID, StatSnapshot> matchStats = new ConcurrentHashMap<>();
 
     /**
@@ -350,7 +354,8 @@ public Set<UUID> getParticipants() {
     /**
      * Ensures the matchStats snapshot contains (at minimum) the recorded trigger totals for the given keys.
      *
-     * MatchDocument treats matchStats as a "diff" map, so we write the totals directly.
+     * Since 0.7.5 this feeds the diagnostic cross-check (not the exported stats) — it keeps the
+     * counter snapshot representing what the pre-event-log stat path would have exported.
      */
     public void applyTriggerIncrementsToMatchStats(Set<String> keys) {
         if (keys == null || keys.isEmpty()) return;

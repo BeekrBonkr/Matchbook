@@ -19,7 +19,8 @@ public record MatchEvent(
         boolean isFinal,    // fatal death / final kill, depending on type
         String deathCause,  // Bukkit EntityDamageEvent.DamageCause name; how the victim actually died (e.g. VOID)
         boolean wasSpectating, // PLAYER_LEAVE only: true if already eliminated (spectating) before they quit
-        String killCause    // PLAYER_DEATH with attribution: how the killer contributed (e.g. ENTITY_ATTACK for a punch into the void)
+        String killCause,   // PLAYER_DEATH with attribution: how the killer contributed (e.g. ENTITY_ATTACK for a punch into the void)
+        boolean statsUncounted // PLAYER_DEATH only: MBedwars flagged this death as not counting toward the victim's stats
 ) {
 
     public enum EventType {
@@ -46,30 +47,31 @@ public record MatchEvent(
 
     public static MatchEvent matchStart(long timestamp) {
         return new MatchEvent(EventType.MATCH_START, timestamp,
-                null, null, null, null, null, null, null, false, null, false, null);
+                null, null, null, null, null, null, null, false, null, false, null, false);
     }
 
     public static MatchEvent matchEnd(long timestamp) {
         return new MatchEvent(EventType.MATCH_END, timestamp,
-                null, null, null, null, null, null, null, false, null, false, null);
+                null, null, null, null, null, null, null, false, null, false, null, false);
     }
 
     public static MatchEvent playerJoin(long timestamp, String uuid, String name, String team) {
         return new MatchEvent(EventType.PLAYER_JOIN, timestamp,
-                uuid, name, team, null, null, null, null, false, null, false, null);
+                uuid, name, team, null, null, null, null, false, null, false, null, false);
     }
 
     public static MatchEvent playerLeave(long timestamp, String uuid, String name, String team, boolean wasSpectating) {
         return new MatchEvent(EventType.PLAYER_LEAVE, timestamp,
-                uuid, name, team, null, null, null, null, false, null, wasSpectating, null);
+                uuid, name, team, null, null, null, null, false, null, wasSpectating, null, false);
     }
 
     /** Death row, optionally carrying the responsible player MBedwars attributed the death to. */
     public static MatchEvent playerDeath(long timestamp, String uuid, String name, String team, boolean fatal,
                                          String deathCause, String killerUuid, String killerName, String killerTeam,
-                                         String killCause) {
+                                         String killCause, boolean statsUncounted) {
         return new MatchEvent(EventType.PLAYER_DEATH, timestamp,
-                uuid, name, team, killerUuid, killerName, killerTeam, null, fatal, deathCause, false, killCause);
+                uuid, name, team, killerUuid, killerName, killerTeam, null, fatal, deathCause, false, killCause,
+                statsUncounted);
     }
 
     /** Legacy standalone kill row — only used when a kill can't be matched to its death row. */
@@ -77,28 +79,29 @@ public record MatchEvent(
                                         String victimName, boolean finalKill, String deathCause) {
         // victim name stored in playerName for display convenience; killerUuid/Name/Team track the killer
         return new MatchEvent(EventType.PLAYER_KILL, timestamp,
-                null, victimName, null, killerUuid, killerName, killerTeam, null, finalKill, deathCause, false, null);
+                null, victimName, null, killerUuid, killerName, killerTeam, null, finalKill, deathCause, false, null,
+                false);
     }
 
     public static MatchEvent bedBreak(long timestamp, String breakerUuid, String breakerName, String breakerTeam,
                                       String bedTeam) {
         return new MatchEvent(EventType.BED_BREAK, timestamp,
-                breakerUuid, breakerName, breakerTeam, null, null, null, bedTeam, false, null, false, null);
+                breakerUuid, breakerName, breakerTeam, null, null, null, bedTeam, false, null, false, null, false);
     }
 
     public static MatchEvent teamEliminate(long timestamp, String teamName) {
         return new MatchEvent(EventType.TEAM_ELIMINATE, timestamp,
-                null, null, teamName, null, null, null, null, false, null, false, null);
+                null, null, teamName, null, null, null, null, false, null, false, null, false);
     }
 
     public static MatchEvent spectatorJoin(long timestamp, String uuid, String name) {
         return new MatchEvent(EventType.SPECTATOR_JOIN, timestamp,
-                uuid, name, null, null, null, null, null, false, null, false, null);
+                uuid, name, null, null, null, null, null, false, null, false, null, false);
     }
 
     public static MatchEvent spectatorLeave(long timestamp, String uuid, String name) {
         return new MatchEvent(EventType.SPECTATOR_LEAVE, timestamp,
-                uuid, name, null, null, null, null, null, false, null, false, null);
+                uuid, name, null, null, null, null, null, false, null, false, null, false);
     }
 
     /**
@@ -110,7 +113,7 @@ public record MatchEvent(
                                  boolean finalKill, String killCause) {
         return new MatchEvent(type, timestamp, playerUuid, playerName, playerTeam,
                 killerUuid, killerName, killerTeam, bedTeam, isFinal || finalKill, deathCause,
-                wasSpectating, killCause);
+                wasSpectating, killCause, statsUncounted);
     }
 
     // ---------------------------------------------------------------------------

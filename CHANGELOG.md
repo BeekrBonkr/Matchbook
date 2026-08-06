@@ -2,6 +2,28 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.7.5] — 2026-08-06
+
+**Changed: match stats are now derived from the event log — the event log is the source of truth.**
+
+Until now, the stats CSV was built from MBedwars' own per-round counters (cross-checked against matchbook's live event counters, taking the higher of the two). That path had several independent ways to go wrong — a counter not reset between back-to-back rounds on the same arena, a roster picking up players from the arena's *next* lobby, the max-merge hiding an over-count — and after two rounds of point fixes (0.7.1, 0.7.3) the same family of symptoms came back in the field: stats rows for players with zero recorded events, and final-kill counts the event log couldn't back up.
+
+The event log never had these problems, so the exported stats now come from it directly:
+
+- **Kills, final kills, deaths, final deaths, beds destroyed, and beds lost are counted from the match's own recorded events** (kill credits from the death rows attributing them, beds lost from which team's bed each `BED_BREAK` row names). The stats CSV and the events CSV can no longer disagree — one is computed from the other.
+- **Wins, losses, placements, and ties are unchanged** — they were already derived from matchbook's own result/placement tracking, not from counters.
+- **Custom tracked keys** an admin added (anything the event log has no record of) still come from the MBedwars counter snapshot, as before.
+- **MBedwars' counters are demoted to a diagnostic cross-check.** They're still captured, and any disagreement with the event-derived value is recorded as a `stat_mismatch` warning inside the match document — so if the counters drift again, the evidence is preserved instead of exported.
+- **Phantom participants are gone.** A teamless "player" the event log never mentions — the roster-capture artifact behind the white-wool rows with stats carried over from a previous round — is dropped from the match document entirely, with a `phantom_participant_dropped` warning as the paper trail.
+
+Event log **recording** is untouched — same events, same rows, same pairing logic as 0.7.4 — with one addition: a death MBedwars flags as not counting toward stats now carries `stats_uncounted: true` on its row (new last column in events CSV exports). The row stays in the log either way; the flag is what lets the stats derivation skip exactly the deaths MBedwars would have skipped, so the two files always reconcile. Old match documents are untouched and render/export exactly as recorded.
+
+**Fixed**
+
+- **`plugin.yml` still declared version 0.7.3**, so matches recorded by 0.7.4 were stamped `matchbook_version: 0.7.3` and the update checker compared against the wrong running version. Both jar and plugin metadata now say 0.7.5.
+
+**Verified by execution** against the compiled release (standalone harness driving the real session/document/codec classes): 39/39 checks — full derivation on a normal match (kills/finals/beds/placements/win-loss), a reproduction of both reported 0.7.3 corruptions (phantom roster row dropped with warning; final_kills over-count exported as the event-log value with a `stat_mismatch` warning), carried-over counter garbage zeroed for a teamed player with no events, uncounted-death exclusion with the kill still credited, legacy `PLAYER_KILL` rows counted, custom tracked-key passthrough, tie handling (tied teams get `ties`, the earlier-eliminated team keeps its loss), and YAML round-trip of the new flag.
+
 ## [0.7.4] — 2026-08-03
 
 **Fixed: kill attribution now pairs kills to deaths exactly instead of guessing by time.**

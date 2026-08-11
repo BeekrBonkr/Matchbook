@@ -253,10 +253,21 @@ public final class MatchLifecycleService {
         Set<Team> roundStartTeams = new HashSet<>();
 
         for (Player p : arena.getPlayers()) {
+            Team team = resolveTeamFromArena(arena, p.getUniqueId());
+
+            // A teamless viewer who is already classified as watching this match stays a spectator.
+            // Whether arena.getPlayers() includes external spectators varies across MBedwars builds;
+            // if it does, promoting them here (unmarkSpectatorOnly + addParticipant) would undo a
+            // correct classification made moments earlier and put a viewer in the match roster.
+            if (team == null && (isSpectator(arena, p) || session.isSpectatorOnly(p.getUniqueId()))) {
+                session.setUsername(p.getUniqueId(), p.getName());
+                continue;
+            }
+
             session.unmarkSpectatorOnly(p.getUniqueId());
             session.addParticipant(p.getUniqueId());
+            session.markRoundRoster(p.getUniqueId());
             session.setUsername(p.getUniqueId(), p.getName());
-            Team team = resolveTeamFromArena(arena, p.getUniqueId());
             session.setTeam(p.getUniqueId(), team);
             if (team != null) {
                 roundStartTeams.add(team);
@@ -274,6 +285,10 @@ public final class MatchLifecycleService {
         // holds teams a player only ever picked in the lobby team selector before switching away,
         // which are empty by the time the round starts and would inflate every placement.
         session.freezeTotalTeams(roundStartTeams.size());
+
+        // The roster is now known, so "was this player part of this round?" becomes answerable —
+        // which is what keeps a stale round-end roster entry from another round out of the match.
+        session.markRoundRosterCaptured();
     }
 
     public void onPlayerJoinArena(Arena arena, Player player) {
@@ -348,6 +363,12 @@ public final class MatchLifecycleService {
         // Real participant (team assigned, or already known participant)
         session.promoteToParticipant(uuid, team);
         session.setUsername(uuid, player.getName());
+        // Joining the arena while the round is running (a rejoin, or an admin dropping in) is a
+        // first-hand observation that this player is part of THIS round, same as the round-start
+        // roster. Pre-round lobby joins aren't: whoever is actually playing is settled by the
+        // round-start capture, and someone who picked a team and left before the round began
+        // never played.
+        if (session.started) session.markRoundRoster(uuid);
         captureMatchStatsBaseline(uuid, session);
         if (session.started && session.tryLogJoin(uuid)) {
             String teamName = team != null ? team.name() : null;
@@ -615,13 +636,39 @@ public final class MatchLifecycleService {
             if (isTeamAliveAtEnd(t, session)) aliveAtEnd.add(t);
         }
 
-        // Only treat "multiple teams alive" as a tie when we do NOT have a definite winning team.
-        // MBedwars versions / event ordering can briefly leave players marked as alive on multiple teams.
-        // If the arena reports a winner, trust it and avoid falsely marking ties.
-        tieByAliveTeams = session.winningTeam == null && aliveAtEnd.size() > 1;
+        // More than one team still standing when the round ended means nobody was played out of the
+        // match: it ran to the time limit (or was force-ended) with every survivor still in it. Those
+        // teams tied for 1st.
+        //
+        // MBedwars may still name a winning team in that situation — some builds/setups break a
+        // time-limit end with their own tiebreak (most beds, most kills). That is a decision about
+        // who to *reward*, not a record of the match having been won, and taking it at face value is
+        // what turned a three-way tie into "1st, 2nd, 2nd": the reported team was stamped 1st and the
+        // other two survivors dropped to runner-up. Survivors win the disagreement by default; set
+        // match.multiple_survivors_are_a_tie to false to go back to trusting the reported winner.
+        //
+        // The override is deliberately limited to the case where the reported winner is itself one of
+        // the surviving teams. If MBedwars names a winner we don't even have alive, our own alive
+        // tracking is the unreliable one and it has no business overruling anything.
+        boolean multipleSurvivors = aliveAtEnd.size() > 1;
+        boolean overrideReportedWinner = multipleSurvivors
+                && session.winningTeam != null
+                && aliveAtEnd.contains(session.winningTeam)
+                && survivorsOutrankReportedWinner();
+
+        tieByAliveTeams = multipleSurvivors && (session.winningTeam == null || overrideReportedWinner);
         if (tieByAliveTeams) {
+            if (overrideReportedWinner) {
+                plugin.getLogger().info("Matchbook: match " + session.matchId + " (arena=" + session.arenaName
+                        + ") ended with " + aliveAtEnd.size() + " teams still standing ("
+                        + teamNames(aliveAtEnd) + "), but MBedwars reported " + session.winningTeam.name()
+                        + " as the winning team. Recording it as a tie between the surviving teams — set "
+                        + "match.multiple_survivors_are_a_tie to false in config.yml to record MBedwars' "
+                        + "winner instead.");
+            }
             session.result = "TIE";
             session.winningTeam = null;
+            session.tieBySurvivors = true;
             for (Team t : aliveAtEnd) {
                 session.setPlacementIfAbsent(t, 1);
             }
@@ -683,6 +730,18 @@ public final class MatchLifecycleService {
         }
     }
 
+    /** Config gate for letting surviving teams overrule a winning team MBedwars reported anyway. */
+    private boolean survivorsOutrankReportedWinner() {
+        return plugin.getMatchbookConfig().raw().getBoolean("match.multiple_survivors_are_a_tie", true);
+    }
+
+    private static String teamNames(Collection<Team> teams) {
+        List<String> names = new ArrayList<>();
+        for (Team t : teams) if (t != null) names.add(t.name());
+        Collections.sort(names);
+        return String.join(", ", names);
+    }
+
     /**
      * Best-effort result inference.
      *
@@ -699,6 +758,12 @@ public final class MatchLifecycleService {
      */
     private void inferResultFromRecordedWinStats(MatchSession session) {
         if (session == null) return;
+
+        // A tie decided by teams surviving to the end is a fact about the match, not a missing
+        // winner to be recovered. Inferring here would undo it: MBedwars hands the survivor it
+        // picked a bedwars:wins, and this method would read that single win, demote the other
+        // survivors from 1st to 2nd, and reproduce the exact standings the survivor rule fixed.
+        if (session.tieBySurvivors) return;
 
         // Only infer when MB didn't provide a clear winner OR we currently think it's a tie.
         // (We still allow overriding a false tie.)
@@ -1014,6 +1079,10 @@ public final class MatchLifecycleService {
 
         session.promoteToParticipant(uuid, newTeam);
         session.setUsername(uuid, player.getName());
+        // A team assignment made while the round is running (auto-balance, admin reassignment)
+        // confirms this player as part of this round — see classifyArenaJoin for why pre-round
+        // assignments don't count.
+        if (session.started) session.markRoundRoster(uuid);
         session.markTeamParticipating(newTeam);
         session.markPlayerAlive(newTeam, uuid);
         captureMatchStatsBaseline(uuid, session);
@@ -1570,7 +1639,15 @@ public final class MatchLifecycleService {
         }.runTaskTimer(plugin, 20L, 20L);
     }
 
-/** Registers one online RoundEndEvent roster member as a participant of the ending match. */
+    /**
+     * Registers one online RoundEndEvent roster member as a participant of the ending match.
+     *
+     * Deliberately does NOT mark them on the round roster (see {@link MatchSession#markRoundRoster}):
+     * this is MBedwars' account of who played, taken after the fact, and it is exactly the input that
+     * has been observed to include people who weren't here. It fills in team/username for players we
+     * already know about; anyone it introduces who left no trace in the round is dropped at
+     * document-build time.
+     */
     private void addRoundEndParticipant(Arena arena, MatchSession session, Player p) {
         if (p == null) return;
         UUID uuid = p.getUniqueId();
@@ -1579,7 +1656,15 @@ public final class MatchLifecycleService {
         session.setTeam(uuid, resolveTeamFromArena(arena, uuid));
     }
 
-    /** Registers one already-quit RoundEndEvent roster member (QuitPlayerMemory) as a participant. */
+    /**
+     * Registers one already-quit RoundEndEvent roster member (QuitPlayerMemory) as a participant.
+     *
+     * Same caveat as {@link #addRoundEndParticipant}, and more so: the team here comes from the
+     * memory itself rather than from live arena state, so a memory left over from an earlier round
+     * on this arena arrives carrying a fully-formed team assignment. That is the phantom-team-member
+     * path — it's tolerated here and filtered by the round-roster check at document-build time,
+     * because for players who genuinely left mid-round this is the only source of their team.
+     */
     private void addRoundEndQuitParticipant(MatchSession session, QuitPlayerMemory mem) {
         if (mem == null) return;
         UUID uuid = mem.getUniqueId();

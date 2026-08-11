@@ -81,6 +81,36 @@ public final class MatchSession {
     private final Set<UUID> participants = ConcurrentHashMap.newKeySet();
 
     /**
+     * Everyone confirmed to have actually taken part in THIS round: the roster observed shortly
+     * after round start, plus anyone who joined or was assigned a team while the round was running.
+     *
+     * This exists because the round-end roster MBedwars hands us ({@code RoundEndEvent}'s winner/
+     * loser player collections and their {@code QuitPlayerMemory} buckets) is not always limited to
+     * the round that just ended: a memory left behind by an EARLIER round on the same arena carries
+     * its own team, and gets bucketed by that team into this round's winners/losers — which used to
+     * add a player who was never here as a full participant, on whichever team happened to match
+     * (typically the winning one, giving a 4-player team a phantom 5th member with all-zero stats).
+     *
+     * A participant who is neither on this set nor mentioned anywhere in the event log did not play
+     * this match; {@code MatchDocument.fromSession} drops them.
+     */
+    private final Set<UUID> roundRoster = ConcurrentHashMap.newKeySet();
+
+    /**
+     * True once the round-start roster capture has actually run. The roster check above is only
+     * meaningful after that point — if a session never captured one (e.g. the plugin was reloaded
+     * mid-round), every participant would look unconfirmed, so the check is skipped entirely.
+     */
+    private volatile boolean roundRosterCaptured = false;
+
+    /**
+     * Set when the standings were decided as a tie because more than one team was still standing
+     * when the round ended. Stops the later win-stat inference from demoting the other survivors
+     * back to 2nd on the strength of an MBedwars tiebreak this match wasn't decided by.
+     */
+    public volatile boolean tieBySurvivors = false;
+
+    /**
      * Players who joined the arena as spectators (watching) and were never part of a team.
      *
      * Important distinction:
@@ -221,6 +251,24 @@ public final class MatchSession {
 
     public Set<UUID> getSpectatorOnly() {
         return spectatorOnly;
+    }
+
+    /** Records that this player was genuinely part of this round (see {@link #roundRoster}). */
+    public void markRoundRoster(UUID uuid) {
+        if (uuid != null) roundRoster.add(uuid);
+    }
+
+    public boolean isOnRoundRoster(UUID uuid) {
+        return uuid != null && roundRoster.contains(uuid);
+    }
+
+    /** Marks the round-start roster capture as having run, enabling the roster check. */
+    public void markRoundRosterCaptured() {
+        roundRosterCaptured = true;
+    }
+
+    public boolean isRoundRosterCaptured() {
+        return roundRosterCaptured;
     }
 
     /**

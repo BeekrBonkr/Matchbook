@@ -2,6 +2,22 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.7.6] — 2026-08-11
+
+Two field-reported bugs, both from trusting MBedwars' account of a match over Matchbook's own record of it.
+
+**Fixed**
+
+- **A team could be recorded with an extra player who never played that match** — a fifth member on a four-player team, all-zero stats, no events, sometimes someone who was spectating at the time. MBedwars' round-end roster includes `QuitPlayerMemory` entries, which are per-arena and outlive the round that created them; one left behind by an *earlier* round arrived still carrying its team and got bucketed into this round's winners or losers by it. Matchbook now tracks who actually played each round (round-start roster, plus anyone who joined or got a team while it ran) and drops participants on neither that roster nor the event log, with a `phantom_participant_dropped … not_on_round_roster` warning. Mid-round leavers and players who never killed, died, or broke a bed are unaffected.
+
+- **A match that ended with several teams still standing recorded a winner instead of a tie** — a three-way tie came out as *1st, 2nd, 2nd, 4th*. Only one team had actually been eliminated; the rest ran to the time limit, and MBedwars' own tiebreak named a winner that Matchbook took at face value. More than one team standing at the end now means those teams **tied for 1st** regardless of what MBedwars announced (eliminated teams keep their earned placement; the override is logged). Set `match.multiple_survivors_are_a_tie: false` to keep the old behaviour. If MBedwars names a winner Matchbook doesn't have alive at all, the announced winner still stands.
+
+- **A spectator present at round start could be promoted into the match roster**, undoing a correct classification made moments earlier — whether `Arena#getPlayers()` includes spectators varies across MBedwars builds. Round-start capture now leaves teamless viewers alone.
+
+**Verified by execution**: a harness replays both reported matches from their exported event logs through the real session/lifecycle/document classes — 18/18. Each bug is reproduced from the real data first (the phantom fifth player; the exact 1,2,2,4 standings), then shown fixed with the rest of each match unchanged, plus guard rails for the three cases where the new rules deliberately stand down.
+
+Already-recorded matches are not corrected retroactively.
+
 ## [0.7.5] — 2026-08-06
 
 **Changed: match stats are now derived from the event log — the event log is the source of truth.**

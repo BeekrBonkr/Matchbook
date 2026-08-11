@@ -1,6 +1,6 @@
 # ============================================================
 #  Matchbook Configuration
-#  Plugin version: 0.6.8  |  Config version: 0.1.1
+#  Plugin version: 0.7.6  |  Config version: 0.1.2
 #
 #  When you update the plugin, Matchbook will automatically:
 #    1. Back up your current config  (config.yml.bak-<version>-<date>)
@@ -11,7 +11,7 @@
 # ============================================================
 
 # Internal config schema version — do not change this.
-config-version: "0.1.1"
+config-version: "0.1.2"
 
 # ============================================================
 #  Mode
@@ -90,6 +90,18 @@ match:
   # MBedwars incrementing bedwars:wins / bedwars:loses.
   # Recommended: true — prevents stat contamination when MBedwars updates stats late.
   enforce_win_loss_from_result: true
+
+  # How to record a match that ends with more than one team still standing (time limit
+  # reached, or the round was force-ended) — nobody was played out of the match.
+  #   true  — every surviving team is recorded as tied for 1st, even if MBedwars announced
+  #           a winning team anyway (some setups break a time-limit end with their own
+  #           tiebreak, e.g. most beds destroyed). Recommended for tournaments, where such
+  #           a match is an overtime/rematch situation an admin needs to see as a tie.
+  #   false — trust MBedwars' announced winner: it takes 1st and the other surviving teams
+  #           are recorded as runners-up.
+  # Either way, teams already eliminated keep the placement they earned, and a winner
+  # MBedwars reports for a team Matchbook doesn't have alive is always trusted.
+  multiple_survivors_are_a_tie: true
 
   # Broadcast the match code in chat to all participants when a match file is saved.
   # Useful so players can immediately use /mb view <code>.

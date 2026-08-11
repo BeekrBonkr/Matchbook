@@ -529,6 +529,8 @@ stateDiagram-v2
 
 Classification at join time is **deferred by `join_classify_delay_ticks`** (default 60): MBedwars can report stale team/spectator state in the seconds right after a round starts, which would misclassify a real player as a spectator or vice versa. The `SpectatorJoinArenaEvent` reason is also used: `LOSE`/`DEATH` mean an eliminated *participant* became an in-game spectator (ignored), anything else is an external viewer (marked spectator-only).
 
+**Who actually played this round** is tracked separately from "who is a participant", in `roundRoster`: the roster observed shortly after round start, plus anyone who joined or was assigned a team *while the round was running*. Round-**end** roster entries don't count — `RoundEndEvent`'s winner/loser lists, and above all their `QuitPlayerMemory` buckets, are MBedwars' after-the-fact account, and a memory left behind by an *earlier* round on the same arena arrives carrying its own team assignment. Those entries are still used to fill in team/username for players already known (the only source of a team for someone who left mid-round), but a participant on neither the round roster nor anywhere in the event log is dropped at document-build time — see section 6.
+
 ### Life of a match
 
 ```mermaid
@@ -554,7 +556,7 @@ sequenceDiagram
     MB->>L: RoundEndEvent (winners, losers, quit memories)
     L->>LS: onRoundEnd
     LS->>S: endUnix = now (dedupes duplicate RoundEnds)
-    LS->>S: roster := RoundEndEvent lists (NOT live arena occupancy)
+    LS->>S: roster := RoundEndEvent lists (NOT live arena occupancy;<br/>entries it introduces are checked against the round roster at save)
     Note over LS: after end_snapshot_delay_ticks…
     LS->>LS: end snapshots → per-match stats capture →<br/>apply trigger counters → finalize placements →<br/>infer result → normalize ranks → reconcile ties →<br/>bake placements into stats
     LS->>S: MATCH_END event, remove session from map
@@ -589,7 +591,14 @@ A match is **only persisted at all** if it has real activity: at least one kill,
 | `bedwars:beds_lost` | `BED_BREAK` rows whose `bed_team` is the player's team. |
 | `bedwars:wins` / `bedwars:loses`, `matchbook:*_place`, `matchbook:ties` | The finalized result/placements (section 7), as before. |
 
-Every derived key is explicitly present (zeroed) in every row, so stats are always baselined to 0. A teamless participant the event log never mentions is dropped from the document entirely (`phantom_participant_dropped` warning) — that's a roster-capture artifact, not a player.
+Every derived key is explicitly present (zeroed) in every row, so stats are always baselined to 0.
+
+Two kinds of roster artifact are dropped from the document entirely, each with a `phantom_participant_dropped` warning naming which rule caught it:
+
+| Rule | What it catches |
+|---|---|
+| `not_on_round_roster` | Someone who was neither on this round's roster (section 5) nor mentioned anywhere in the event log — whatever team came attached to them. This is the stale round-end roster entry: a `QuitPlayerMemory` from an earlier round on the same arena, bucketed into this round's winners/losers by the team it still carries, which showed up as an extra member of whichever team matched (typically the winning one). Skipped entirely for a session that never captured a round roster, where every participant would look unconfirmed. |
+| `no_team_no_events` | A teamless participant the event log never mentions — e.g. a player queueing into this arena's next round while this one was ending. |
 
 MBedwars' counters are still captured, but demoted to supporting roles:
 
@@ -618,11 +627,19 @@ Placements (1st/2nd/3rd…) are tracked **live** and then repaired at round end 
 
 **Round-end pipeline (in order, each step feeding the next):**
 
-1. `finalizePlacements` — infer missed bed states via reflection, **drop teams nobody finished on**, detect ties (>1 teams alive with no reported winner), stamp winner as 1st, fill eliminations that were missed live, and assign conservative fallback ranks to ambiguous teams (never falsely rewarding them, never colliding on the same rank).
-2. `inferResultFromRecordedWinStats` — some MBedwars builds fire the winning-team event with `null` winner; infer from which team's players have `bedwars:wins` in their per-match stats. Can convert a false TIE into a definitive win (or a real multi-team tie).
+1. `finalizePlacements` — infer missed bed states via reflection, **drop teams nobody finished on**, detect ties (see below), stamp winner as 1st, fill eliminations that were missed live, and assign conservative fallback ranks to ambiguous teams (never falsely rewarding them, never colliding on the same rank).
+2. `inferResultFromRecordedWinStats` — some MBedwars builds fire the winning-team event with `null` winner; infer from which team's players have `bedwars:wins` in their per-match stats. Can convert a false TIE into a definitive win (or a real multi-team tie). Stands down for a survivor tie (below), which it would otherwise undo.
 3. `normalizePlacements` — collapse to a **contiguous 1..N competition ranking** (order-preserving; genuine ties share a rank, e.g. 1,1,3). This is the backstop that makes standings correct even if the arithmetic drifted — the guarantee behind "never 1st/3rd/4th with no 2nd".
 4. `reconcileTieWithPlacements` — a "TIE" whose standings show exactly *one* team at 1st wasn't a tie; promote it to a win (logged).
 5. `applyPlacementsToMatchStats` — bake one-hot keys into each participant's stats: `matchbook:1st_place`, `matchbook:2nd_place`, … or `matchbook:ties` for tied-for-1st teams. This makes multi-match CSV aggregation work by plain summation.
+
+**Ties between surviving teams**
+
+More than one team still standing when the round ends means nobody was played out of the match: it hit the time limit, or was force-ended, with every survivor still in it. Those teams are recorded as **tied for 1st**, and teams eliminated earlier keep the placement they earned.
+
+MBedwars may still announce a winning team in that situation — some setups break a time-limit end with their own tiebreak (most beds destroyed, most kills). That is a decision about who to *reward*, not a record of the match having been won, and taking it at face value turned a three-way tie into "1st, 2nd, 2nd": the announced team was stamped 1st and the other two survivors dropped to runner-up. Survivors win that disagreement by default; set **`match.multiple_survivors_are_a_tie: false`** to record MBedwars' winner instead.
+
+The override is deliberately one-sided: it only applies when the announced winner is *itself* one of the surviving teams. If MBedwars names a winner Matchbook doesn't even have alive, the alive-tracking is the unreliable side and the announced winner stands.
 
 The final result string is one of `WIN:<TEAM>`, `TIE`, `ABORTED`, or `UNKNOWN`.
 

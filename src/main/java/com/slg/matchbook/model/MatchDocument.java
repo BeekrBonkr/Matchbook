@@ -162,12 +162,31 @@ public record MatchDocument(
             Long startTaken = session.getStartTakenUnix(u);
             String uuidStr = u.toString();
 
+            boolean seenInEvents = uuidsSeenInEvents.contains(uuidStr);
+
+            // A participant who was never on this round's roster and who the event log never
+            // mentions did not play this match, whatever team came attached to them. This is the
+            // round-end roster artifact: MBedwars' winner/loser buckets — above all the
+            // QuitPlayerMemory ones, which carry their own team — can include someone left over
+            // from an earlier round on this arena, who then showed up as a fully-formed extra
+            // member of whichever team matched (a 4-player team recording a 5th player who never
+            // touched the match). Dropped, with a paper trail.
+            //
+            // Only meaningful once a round-start roster was actually captured; without one every
+            // participant would look unconfirmed, so the check stands down entirely.
+            if (!seenInEvents && session.isRoundRosterCaptured() && !session.isOnRoundRoster(u)) {
+                warnings.add("phantom_participant_dropped " + u + (username != null ? " " + username : "")
+                        + " not_on_round_roster");
+                continue;
+            }
+
             // A participant with no team that the event log never mentions was never actually in
             // this match — a roster-capture artifact (e.g. a player queueing into this arena's next
             // round while this one was ending). Keeping them produced the "teamless player with
             // stats carried over from another round" rows. Dropped, with a paper trail.
-            if (team == null && !uuidsSeenInEvents.contains(uuidStr)) {
-                warnings.add("phantom_participant_dropped " + u + (username != null ? " " + username : ""));
+            if (team == null && !seenInEvents) {
+                warnings.add("phantom_participant_dropped " + u + (username != null ? " " + username : "")
+                        + " no_team_no_events");
                 continue;
             }
             keptParticipants.add(u);

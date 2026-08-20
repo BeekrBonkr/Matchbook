@@ -43,6 +43,14 @@ public final class MatchbookConfig {
         return v.equals("mysql") ? StorageType.MYSQL : StorageType.YAML;
     }
 
+    /**
+     * Raw display-timezone string from config. "server" (the default) means the machine's
+     * local zone; anything else is parsed as an IANA zone id by TimezoneService.
+     */
+    public String displayTimezone() {
+        return raw().getString("display.timezone", "server");
+    }
+
     public boolean debugLogging() {
         return raw().getBoolean("logging.debug", false);
     }

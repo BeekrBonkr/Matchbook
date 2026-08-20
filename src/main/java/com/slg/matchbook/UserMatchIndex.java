@@ -111,6 +111,29 @@ public final class UserMatchIndex {
         }
     }
 
+    /** Stored display-timezone override (an IANA zone id), or null if the player has none. */
+    public String getTimezone(UUID uuid) {
+        synchronized (lockFor(uuid)) {
+            File f = new File(usersDir(), uuid.toString() + ".yml");
+            if (!f.exists()) return null;
+            return YamlConfiguration.loadConfiguration(f).getString("timezone", null);
+        }
+    }
+
+    /** Sets (or with null, clears) the player's display-timezone override. */
+    public void setTimezone(UUID uuid, String zoneId) {
+        synchronized (lockFor(uuid)) {
+            File f = new File(usersDir(), uuid.toString() + ".yml");
+            YamlConfiguration yml = YamlConfiguration.loadConfiguration(f);
+            yml.set("timezone", zoneId);
+            try {
+                yml.save(f);
+            } catch (IOException e) {
+                plugin.getLogger().warning("Matchbook: failed saving timezone to " + f.getAbsolutePath() + ": " + e.getMessage());
+            }
+        }
+    }
+
     public List<String> getMatchIdsForPlayer(UUID uuid) {
         synchronized (lockFor(uuid)) {
             File f = new File(usersDir(), uuid.toString() + ".yml");

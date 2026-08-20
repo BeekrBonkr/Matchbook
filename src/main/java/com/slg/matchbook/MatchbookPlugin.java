@@ -12,6 +12,7 @@ import com.slg.matchbook.storage.MatchRepository;
 import com.slg.matchbook.storage.YamlMatchRepository;
 import com.slg.matchbook.storage.MySqlMatchRepository;
 import com.slg.matchbook.service.MatchLifecycleService;
+import com.slg.matchbook.service.TimezoneService;
 import com.slg.matchbook.service.UpdateChecker;
 import de.marcely.bedwars.api.BedwarsAPI;
 import org.bukkit.Bukkit;
@@ -36,8 +37,10 @@ public final class MatchbookPlugin extends JavaPlugin {
     private MatchesGui matchesGui;
     private EventLogGui eventLogGui;
     private UpdateChecker updateChecker;
+    private TimezoneService timezones;
 
     public UpdateChecker getUpdateChecker() { return updateChecker; }
+    public TimezoneService getTimezones()   { return timezones; }
 
     public MatchesGui getMatchesGui()       { return matchesGui;   }
     public MatchesDetailsGui getDetailsGui(){ return detailsGui;   }
@@ -160,6 +163,7 @@ public final class MatchbookPlugin extends JavaPlugin {
         this.config = new com.slg.matchbook.config.MatchbookConfig(this);
         this.config.load();
         this.settings = config.runtimeSettings();
+        this.timezones = new TimezoneService(this);
 
         StorageType type = config.storageType();
         if (type == StorageType.MYSQL) this.repo = new MySqlMatchRepository(this, config.raw());

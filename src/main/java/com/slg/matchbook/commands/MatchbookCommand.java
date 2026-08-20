@@ -35,6 +35,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
     private static final String PERM_MATCHES = "mb.command.matches";
     private static final String PERM_ALL = "mb.command.all";
     private static final String PERM_VIEW = "mb.command.view";
+    private static final String PERM_TIMEZONE = "mb.command.timezone";
     private static final String PERM_EXPORT = "mb.command.export";
     private static final String PERM_MIGRATE = "mb.command.migrate";
     private static final String PERM_HELP = "mb.command.help";
@@ -174,6 +175,69 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
                         }
                         details.openDetails(p, matchId, 0);
                     });
+                });
+                return true;
+            }
+
+            case "timezone", "tz" -> {
+                if (!canDefault(sender, PERM_TIMEZONE)) {
+                    deny(sender);
+                    return true;
+                }
+                if (!(sender instanceof Player p)) {
+                    sender.sendMessage(ChatColor.RED + "This command can only be used in-game.");
+                    return true;
+                }
+                var timezones = plugin.getTimezones();
+                java.util.UUID uuid = p.getUniqueId();
+
+                // All three branches touch users/<uuid>.yml, so they run async and bounce
+                // the feedback back to the main thread.
+                if (args.length < 2) {
+                    org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        java.time.ZoneId zone = timezones.zoneFor(uuid);
+                        boolean overridden = timezones.hasOverride(uuid);
+                        String now = com.slg.matchbook.service.TimezoneService.currentTimeIn(zone);
+                        org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                            p.sendMessage(ChatColor.GRAY + "Your match times are shown in "
+                                    + ChatColor.WHITE + zone.getId()
+                                    + ChatColor.GRAY + " (currently " + ChatColor.WHITE + now + ChatColor.GRAY + ").");
+                            p.sendMessage(overridden
+                                    ? ChatColor.DARK_GRAY + "Personal setting — /" + label + " timezone reset to use the server default."
+                                    : ChatColor.DARK_GRAY + "Server default — /" + label + " timezone <zone> to change (e.g. eastern, central, mountain, pacific).");
+                        });
+                    });
+                    return true;
+                }
+
+                String zoneArg = args[1].trim();
+                if (zoneArg.equalsIgnoreCase("reset") || zoneArg.equalsIgnoreCase("default")) {
+                    org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        timezones.clearZone(uuid);
+                        java.time.ZoneId zone = timezones.zoneFor(uuid);
+                        String now = com.slg.matchbook.service.TimezoneService.currentTimeIn(zone);
+                        org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
+                                p.sendMessage(ChatColor.GREEN + "Timezone reset to the server default: "
+                                        + ChatColor.WHITE + zone.getId()
+                                        + ChatColor.GREEN + " (currently " + ChatColor.WHITE + now + ChatColor.GREEN + ")."));
+                    });
+                    return true;
+                }
+
+                java.time.ZoneId zone = com.slg.matchbook.service.TimezoneService.parseZone(zoneArg);
+                if (zone == null) {
+                    p.sendMessage(ChatColor.RED + "Unknown timezone: " + ChatColor.WHITE + zoneArg);
+                    p.sendMessage(ChatColor.GRAY + "Try: " + ChatColor.WHITE + "eastern, central, mountain, pacific"
+                            + ChatColor.GRAY + " — or an IANA id like " + ChatColor.WHITE + "America/New_York" + ChatColor.GRAY + ".");
+                    return true;
+                }
+                org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    timezones.setZone(uuid, zone);
+                    String now = com.slg.matchbook.service.TimezoneService.currentTimeIn(zone);
+                    org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
+                            p.sendMessage(ChatColor.GREEN + "Match times will now be shown in "
+                                    + ChatColor.WHITE + zone.getId()
+                                    + ChatColor.GREEN + " (currently " + ChatColor.WHITE + now + ChatColor.GREEN + ")."));
                 });
                 return true;
             }
@@ -420,6 +484,7 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
             if (canDefault(sender, PERM_MATCHES) || sender.hasPermission("matchbook.matches")) subs.add("matches");
             if (canDefault(sender, PERM_ALL)) subs.add("all");
             if (canDefault(sender, PERM_VIEW)) subs.add("view");
+            if (canDefault(sender, PERM_TIMEZONE)) subs.add("timezone");
             if (canDefault(sender, PERM_EXPORT)) subs.add("export");
             if (canAdmin(sender, PERM_MIGRATE) || sender.hasPermission("matchbook.migrate") || sender.hasPermission("matchbook.admin")) subs.add("migrate");
             if (canAdmin(sender, PERM_RELOAD) || sender.hasPermission("matchbook.admin")) subs.add("reload");
@@ -446,6 +511,14 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
 
             if (sub.equals("view")) {
                 return filterPrefix(candidateMatchIds(sender), partial);
+            }
+
+            if (sub.equals("timezone") || sub.equals("tz")) {
+                return filterPrefix(List.of(
+                        "eastern", "central", "mountain", "pacific", "alaska", "hawaii", "arizona",
+                        "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+                        "UTC", "reset"
+                ), partial);
             }
         }
 
@@ -542,6 +615,10 @@ public final class MatchbookCommand implements CommandExecutor, TabCompleter {
         }
         if (canDefault(sender, PERM_VIEW)) {
             sender.sendMessage(ChatColor.GRAY + " - /" + label + " view <matchcode>" + ChatColor.DARK_GRAY + "  (open a specific match)");
+            any = true;
+        }
+        if (canDefault(sender, PERM_TIMEZONE)) {
+            sender.sendMessage(ChatColor.GRAY + " - /" + label + " timezone [zone|reset]" + ChatColor.DARK_GRAY + "  (your display timezone)");
             any = true;
         }
         if (canDefault(sender, PERM_EXPORT)) {

@@ -2,6 +2,20 @@
 
 All notable changes to Matchbook over the past month, newest first.
 
+## [0.7.7] — 2026-08-20
+
+**Added: match times are now shown in each player's own timezone.**
+
+Match dates and times in the GUIs (match list, match details, event log) were rendered in the server machine's timezone — UTC on a typical host — regardless of where the viewer actually lives. Matches are stored as absolute unix timestamps, so this is purely a display change: no saved data is touched, and two players viewing the same match each see it in their own local time.
+
+- **`/mb timezone <zone>`** (alias `/mb tz`) sets a personal display timezone, remembered per player. US-friendly names are accepted — `eastern`, `central`, `mountain`, `pacific`, `alaska`, `hawaii`, `arizona`, and abbreviations like `est`/`cdt` — as well as any IANA id like `America/New_York`. Abbreviations map to real zones, so daylight saving stays correct year-round. `/mb timezone` alone shows the current setting; `/mb timezone reset` returns to the server default.
+- **`display.timezone`** in config.yml sets the server-wide default (`server` = the machine's zone, the old behavior). Set it to e.g. `America/New_York` and only players outside that zone ever need the command. The new section is added to existing configs automatically (config-version 0.1.3).
+- New permission `mb.command.timezone`, included in the default `mb.command.default` group.
+
+**Fixed**
+
+- **The match-details Back button always went to the viewer's own match history, page 0** — even when the match was opened from `/mb all` or from a later page of a history list. The details GUI (and the event log GUI behind it) now remembers where it was opened from, and Back returns there — same list, same page. Backing out of an event log also returns to the details page you left it from, and details opened directly via `/mb view` still fall back to your own history.
+
 ## [0.7.6] — 2026-08-11
 
 Two field-reported bugs, both from trusting MBedwars' account of a match over Matchbook's own record of it.

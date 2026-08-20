@@ -13,7 +13,9 @@ import org.bukkit.inventory.*;
 import org.bukkit.inventory.meta.ItemMeta;
 
 import java.io.File;
-import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 public final class MatchesDetailsGui implements Listener {
@@ -37,6 +39,10 @@ public final class MatchesDetailsGui implements Listener {
     }
 
     public void openDetails(Player viewer, String matchId, int page) {
+        openDetails(viewer, matchId, page, null);
+    }
+
+    public void openDetails(Player viewer, String matchId, int page, ReturnTarget origin) {
         UUID viewerUuid = viewer.getUniqueId();
 
         // Repo reads (file/JDBC) can block for a while under MySQL storage; keep them off the main thread
@@ -52,9 +58,9 @@ public final class MatchesDetailsGui implements Listener {
             if (ymlFinal == null) {
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     if (!viewer.isOnline()) return;
-                    Inventory inv = Bukkit.createInventory(new DetailsHolder(viewerUuid, matchId, 0), SIZE,
+                    Inventory inv = Bukkit.createInventory(new DetailsHolder(viewerUuid, matchId, 0, origin), SIZE,
                             ChatColor.DARK_GRAY + "Match Details");
-                    buildNavBar(inv, null, 0, 0);
+                    buildNavBar(inv, null, 0, 0, origin);
                     inv.setItem(22, errorItem("Match not found", matchId));
                     viewer.openInventory(inv);
                 });
@@ -73,7 +79,7 @@ public final class MatchesDetailsGui implements Listener {
             for (int i = start; i < end; i++) {
                 playerItems.add(buildPlayerItem(ymlFinal, participants.get(i), viewerUuid));
             }
-            ItemStack header = buildHeaderItem(ymlFinal);
+            ItemStack header = buildHeaderItem(ymlFinal, plugin.getTimezones().zoneFor(viewerUuid));
 
             int maxPageFinal = maxPage;
             int pFinal = p;
@@ -86,9 +92,9 @@ public final class MatchesDetailsGui implements Listener {
                         + ChatColor.DARK_GRAY + "• "
                         + ChatColor.GRAY + (pFinal + 1) + "/" + (maxPageFinal + 1);
 
-                Inventory inv = Bukkit.createInventory(new DetailsHolder(viewerUuid, matchId, pFinal), SIZE, title);
+                Inventory inv = Bukkit.createInventory(new DetailsHolder(viewerUuid, matchId, pFinal, origin), SIZE, title);
 
-                buildNavBar(inv, ymlFinal, pFinal, maxPageFinal);
+                buildNavBar(inv, ymlFinal, pFinal, maxPageFinal, origin);
                 inv.setItem(HEADER_SLOT, header);
 
                 int slot = PLAYER_START_SLOT;
@@ -103,14 +109,19 @@ public final class MatchesDetailsGui implements Listener {
     // Nav bar builder (shared across all pages)
     // -----------------------------------------------------------------------
 
-    private void buildNavBar(Inventory inv, YamlConfiguration yml, int page, int maxPage) {
+    private void buildNavBar(Inventory inv, YamlConfiguration yml, int page, int maxPage, ReturnTarget origin) {
         // Fill bottom row with gray panes
         for (int i = 45; i < 54; i++) inv.setItem(i, navPane());
+
+        String backLore;
+        if (origin instanceof ReturnTarget.AllMatches) backLore = "Return to all matches";
+        else if (origin instanceof ReturnTarget.History) backLore = "Return to match history";
+        else backLore = "Return to your matches";
 
         inv.setItem(SLOT_PREV, navButton(Material.SPECTRAL_ARROW, ChatColor.YELLOW + "Previous Page",
                 page > 0 ? ChatColor.GRAY + "Go to page " + page : ChatColor.DARK_GRAY + "Already on first page"));
         inv.setItem(SLOT_BACK, navButton(Material.DARK_OAK_DOOR, ChatColor.RED + "Back",
-                ChatColor.GRAY + "Return to match list"));
+                ChatColor.GRAY + backLore));
         inv.setItem(SLOT_NEXT, navButton(Material.SPECTRAL_ARROW, ChatColor.YELLOW + "Next Page",
                 page < maxPage ? ChatColor.GRAY + "Go to page " + (page + 2) : ChatColor.DARK_GRAY + "Already on last page"));
 
@@ -126,7 +137,7 @@ public final class MatchesDetailsGui implements Listener {
     // Item builders
     // -----------------------------------------------------------------------
 
-    private ItemStack buildHeaderItem(YamlConfiguration yml) {
+    private ItemStack buildHeaderItem(YamlConfiguration yml, ZoneId zone) {
         String matchId  = yml.getString("match.match_id", "");
         String arena    = yml.getString("match.arena", "");
         String result   = yml.getString("match.result", "");
@@ -143,8 +154,8 @@ public final class MatchesDetailsGui implements Listener {
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + "Arena: " + ChatColor.WHITE + arena);
         lore.add(ChatColor.GRAY + "Result: " + resultColor + result);
-        lore.add(ChatColor.GRAY + "Start:  " + ChatColor.WHITE + formatUnix(startUnix));
-        lore.add(ChatColor.GRAY + "End:    " + ChatColor.WHITE + formatUnix(endUnix));
+        lore.add(ChatColor.GRAY + "Start:  " + ChatColor.WHITE + formatUnix(startUnix, zone));
+        lore.add(ChatColor.GRAY + "End:    " + ChatColor.WHITE + formatUnix(endUnix, zone));
         if (duration > 0) {
             lore.add(ChatColor.GRAY + "Length: " + ChatColor.WHITE + formatDuration((int) duration));
         }
@@ -287,20 +298,27 @@ public final class MatchesDetailsGui implements Listener {
         if (raw < 0 || raw >= SIZE) return;
 
         if (raw == SLOT_BACK) {
-            plugin.getMatchesGui().openHistory(p, p.getUniqueId(), 0);
+            if (holder.origin instanceof ReturnTarget.AllMatches all) {
+                plugin.getMatchesGui().openAll(p, all.page());
+            } else if (holder.origin instanceof ReturnTarget.History hist) {
+                plugin.getMatchesGui().openHistory(p, hist.targetUuid(), hist.page());
+            } else {
+                // Opened directly (e.g. /matchbook view) — fall back to the viewer's own history.
+                plugin.getMatchesGui().openHistory(p, p.getUniqueId(), 0);
+            }
             return;
         }
         if (raw == SLOT_PREV) {
-            openDetails(p, holder.matchId, holder.page - 1);
+            openDetails(p, holder.matchId, holder.page - 1, holder.origin);
             return;
         }
         if (raw == SLOT_NEXT) {
-            openDetails(p, holder.matchId, holder.page + 1);
+            openDetails(p, holder.matchId, holder.page + 1, holder.origin);
             return;
         }
         if (raw == SLOT_EVENTS) {
             EventLogGui eventGui = plugin.getEventLogGui();
-            if (eventGui != null) eventGui.openEvents(p, holder.matchId, 0);
+            if (eventGui != null) eventGui.openEvents(p, holder.matchId, 0, holder.page, holder.origin);
             return;
         }
     }
@@ -350,9 +368,11 @@ public final class MatchesDetailsGui implements Listener {
         return ChatColor.GRAY + "• " + ChatColor.WHITE + name + ": " + ChatColor.AQUA + value;
     }
 
-    private static String formatUnix(long unix) {
+    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("MM/dd/yy h:mm a", Locale.US);
+
+    private static String formatUnix(long unix, ZoneId zone) {
         if (unix <= 0) return "—";
-        return new SimpleDateFormat("MM/dd/yy h:mm a").format(new Date(unix * 1000L));
+        return DATE_FMT.withZone(zone).format(Instant.ofEpochSecond(unix));
     }
 
     private static String formatDuration(int totalSec) {
@@ -471,11 +491,13 @@ public final class MatchesDetailsGui implements Listener {
         final UUID viewerUuid;
         final String matchId;
         final int page;
+        final ReturnTarget origin;
 
-        DetailsHolder(UUID viewerUuid, String matchId, int page) {
+        DetailsHolder(UUID viewerUuid, String matchId, int page, ReturnTarget origin) {
             this.viewerUuid = viewerUuid;
             this.matchId    = matchId;
             this.page       = page;
+            this.origin     = origin;
         }
 
         @Override public Inventory getInventory() { return null; }

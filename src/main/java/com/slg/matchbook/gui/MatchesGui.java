@@ -14,7 +14,9 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 
 import java.io.File;
-import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 public final class MatchesGui implements Listener {
@@ -44,6 +46,7 @@ public final class MatchesGui implements Listener {
         UUID viewerUuid = viewer.getUniqueId();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             List<String> matchIds = plugin.getRepo().listMatchIdsForPlayer(targetUuid);
+            ZoneId zone = plugin.getTimezones().zoneFor(viewerUuid);
 
             int maxPage = matchIds.isEmpty() ? 0 : Math.max(0, (matchIds.size() - 1) / PAGE_SLOTS);
             int p = Math.max(0, Math.min(page, maxPage));
@@ -52,7 +55,7 @@ public final class MatchesGui implements Listener {
             int end   = Math.min(matchIds.size(), start + PAGE_SLOTS);
             List<ItemStack> items = new ArrayList<>();
             for (int i = start; i < end; i++) {
-                items.add(buildMatchItem(viewerUuid, matchIds.get(i), true));
+                items.add(buildMatchItem(viewerUuid, matchIds.get(i), true, zone));
             }
 
             int maxPageFinal = maxPage;
@@ -79,6 +82,7 @@ public final class MatchesGui implements Listener {
         UUID viewerUuid = viewer.getUniqueId();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             List<String> matchIds = plugin.getRepo().listAllMatchIds();
+            ZoneId zone = plugin.getTimezones().zoneFor(viewerUuid);
 
             int maxPage = matchIds.isEmpty() ? 0 : Math.max(0, (matchIds.size() - 1) / PAGE_SLOTS);
             int p = Math.max(0, Math.min(page, maxPage));
@@ -87,7 +91,7 @@ public final class MatchesGui implements Listener {
             int end   = Math.min(matchIds.size(), start + PAGE_SLOTS);
             List<ItemStack> items = new ArrayList<>();
             for (int i = start; i < end; i++) {
-                items.add(buildMatchItem(viewerUuid, matchIds.get(i), false));
+                items.add(buildMatchItem(viewerUuid, matchIds.get(i), false, zone));
             }
 
             int maxPageFinal = maxPage;
@@ -132,7 +136,7 @@ public final class MatchesGui implements Listener {
     // Match item builder
     // -----------------------------------------------------------------------
 
-    private ItemStack buildMatchItem(UUID viewerUuid, String matchEntry, boolean includeViewerStats) {
+    private ItemStack buildMatchItem(UUID viewerUuid, String matchEntry, boolean includeViewerStats, ZoneId zone) {
         String matchId = matchEntry;
         if (matchEntry != null && (matchEntry.contains("/") || matchEntry.endsWith(".yml"))) {
             File legacy = new File(new File(plugin.getAddonDataFolder(), "matches"), matchEntry);
@@ -213,7 +217,7 @@ public final class MatchesGui implements Listener {
 
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + "Arena: " + ChatColor.WHITE + arena);
-        lore.add(ChatColor.GRAY + "Date:  " + ChatColor.WHITE + formatUnix(startUnix));
+        lore.add(ChatColor.GRAY + "Date:  " + ChatColor.WHITE + formatUnix(startUnix, zone));
         if (duration > 0) {
             lore.add(ChatColor.GRAY + "Length: " + ChatColor.WHITE + formatDuration((int) duration));
         }
@@ -276,7 +280,10 @@ public final class MatchesGui implements Listener {
         String matchId = meta.getPersistentDataContainer().get(KEY_MATCH_ID, PersistentDataType.STRING);
         if (matchId == null || matchId.isBlank()) return;
 
-        detailsGui.openDetails(p, matchId, 0);
+        ReturnTarget origin = h instanceof HistoryHolder hh
+                ? new ReturnTarget.History(hh.targetUuid, hh.page)
+                : new ReturnTarget.AllMatches(((AllHolder) h).page);
+        detailsGui.openDetails(p, matchId, 0, origin);
     }
 
     @EventHandler
@@ -316,9 +323,11 @@ public final class MatchesGui implements Listener {
         return ChatColor.GRAY + "• " + ChatColor.WHITE + name + ": " + ChatColor.AQUA + value;
     }
 
-    private static String formatUnix(long unix) {
+    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("MM/dd/yy h:mm a", Locale.US);
+
+    private static String formatUnix(long unix, ZoneId zone) {
         if (unix <= 0) return "—";
-        return new SimpleDateFormat("MM/dd/yy h:mm a").format(new Date(unix * 1000L));
+        return DATE_FMT.withZone(zone).format(Instant.ofEpochSecond(unix));
     }
 
     private static String formatDuration(int totalSec) {

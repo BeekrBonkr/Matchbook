@@ -1,6 +1,6 @@
 # ============================================================
 #  Matchbook Configuration
-#  Plugin version: 0.7.6  |  Config version: 0.1.2
+#  Plugin version: 0.7.7  |  Config version: 0.1.3
 #
 #  When you update the plugin, Matchbook will automatically:
 #    1. Back up your current config  (config.yml.bak-<version>-<date>)
@@ -11,7 +11,7 @@
 # ============================================================
 
 # Internal config schema version — do not change this.
-config-version: "0.1.2"
+config-version: "0.1.3"
 
 # ============================================================
 #  Mode
@@ -188,6 +188,22 @@ export_upload:
   # instance works here (e.g. https://hst.sh).
   # Note: pastes are public and have no built-in expiry guarantee.
   server: "https://hastebin.com"
+
+# ============================================================
+#  Display
+# ============================================================
+display:
+  # Timezone used to display match dates/times in the GUIs (match list, match
+  # details, event log). Display only — matches are always stored as absolute
+  # unix timestamps, so changing this never touches saved data.
+  #
+  #   server      — use the server machine's local timezone
+  #   <zone id>   — any IANA timezone id, e.g. America/New_York, America/Chicago,
+  #                 America/Denver, America/Los_Angeles, UTC
+  #
+  # Players can personally override this with /mb timezone <zone>
+  # (e.g. /mb timezone eastern); their choice is remembered per player.
+  timezone: "server"
 
 # ============================================================
 #  Placeholder reliability  (PlaceholderAPI)

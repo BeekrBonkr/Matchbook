@@ -14,7 +14,9 @@ import org.bukkit.inventory.*;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 
-import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 public final class EventLogGui implements Listener {
@@ -38,7 +40,7 @@ public final class EventLogGui implements Listener {
     // Public entry point
     // -----------------------------------------------------------------------
 
-    public void openEvents(Player viewer, String matchId, int page) {
+    public void openEvents(Player viewer, String matchId, int page, int detailsPage, ReturnTarget origin) {
         UUID viewerUuid = viewer.getUniqueId();
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
@@ -46,6 +48,7 @@ public final class EventLogGui implements Listener {
 
             List<Map<String, Object>> events = MatchYamlCodec.readRawEvents(yml);
             long startUnix = yml != null ? yml.getLong("match.start_unix", 0L) : 0L;
+            ZoneId zone = plugin.getTimezones().zoneFor(viewerUuid);
 
             int maxPage = events.isEmpty() ? 0 : Math.max(0, (events.size() - 1) / PAGE_SLOTS);
             int p = Math.max(0, Math.min(page, maxPage));
@@ -54,7 +57,7 @@ public final class EventLogGui implements Listener {
             int end = Math.min(events.size(), start + PAGE_SLOTS);
             List<ItemStack> eventItems = new ArrayList<>();
             for (int i = start; i < end; i++) {
-                eventItems.add(buildEventItem(events.get(i), startUnix));
+                eventItems.add(buildEventItem(events.get(i), startUnix, zone));
             }
 
             boolean empty = events.isEmpty();
@@ -68,7 +71,7 @@ public final class EventLogGui implements Listener {
                         + "(" + matchId + ") " + ChatColor.DARK_GRAY + "• "
                         + ChatColor.GRAY + (pFinal + 1) + "/" + (maxPageFinal + 1);
 
-                Inventory inv = Bukkit.createInventory(new EventLogHolder(viewerUuid, matchId, pFinal), SIZE, title);
+                Inventory inv = Bukkit.createInventory(new EventLogHolder(viewerUuid, matchId, pFinal, detailsPage, origin), SIZE, title);
 
                 // Bottom nav bar
                 for (int i = 45; i < 54; i++) inv.setItem(i, navPane());
@@ -99,7 +102,7 @@ public final class EventLogGui implements Listener {
     // Event item builder
     // -----------------------------------------------------------------------
 
-    private ItemStack buildEventItem(Map<String, Object> ev, long startUnix) {
+    private ItemStack buildEventItem(Map<String, Object> ev, long startUnix, ZoneId zone) {
         String type      = str(ev, "type", "UNKNOWN");
         long   timestamp = num(ev, "timestamp");
         int    offset    = (int) num(ev, "offset");
@@ -107,7 +110,7 @@ public final class EventLogGui implements Listener {
         String timeLabel = formatOffset(offset, timestamp, startUnix);
 
         return switch (type) {
-            case "MATCH_START"  -> matchStartItem(timestamp);
+            case "MATCH_START"  -> matchStartItem(timestamp, zone);
             case "MATCH_END"    -> matchEndItem(timeLabel, offset);
             case "PLAYER_JOIN"  -> playerJoinItem(ev, timeLabel);
             case "PLAYER_LEAVE" -> playerLeaveItem(ev, timeLabel);
@@ -121,12 +124,12 @@ public final class EventLogGui implements Listener {
         };
     }
 
-    private ItemStack matchStartItem(long timestamp) {
+    private ItemStack matchStartItem(long timestamp, ZoneId zone) {
         ItemStack it = new ItemStack(Material.LIME_STAINED_GLASS_PANE);
         ItemMeta meta = it.getItemMeta();
         meta.setDisplayName(ChatColor.GREEN + "" + ChatColor.BOLD + "Match Start");
         meta.setLore(List.of(
-                ChatColor.GRAY + "Time: " + ChatColor.WHITE + formatWall(timestamp),
+                ChatColor.GRAY + "Time: " + ChatColor.WHITE + formatWall(timestamp, zone),
                 ChatColor.DARK_GRAY + "Start of the match"
         ));
         it.setItemMeta(meta);
@@ -314,15 +317,15 @@ public final class EventLogGui implements Listener {
         if (raw < 0 || raw >= SIZE) return;
 
         if (raw == SLOT_BACK) {
-            plugin.getDetailsGui().openDetails(p, holder.matchId, 0);
+            plugin.getDetailsGui().openDetails(p, holder.matchId, holder.detailsPage, holder.origin);
             return;
         }
         if (raw == SLOT_PREV) {
-            openEvents(p, holder.matchId, holder.page - 1);
+            openEvents(p, holder.matchId, holder.page - 1, holder.detailsPage, holder.origin);
             return;
         }
         if (raw == SLOT_NEXT) {
-            openEvents(p, holder.matchId, holder.page + 1);
+            openEvents(p, holder.matchId, holder.page + 1, holder.detailsPage, holder.origin);
         }
     }
 
@@ -369,9 +372,11 @@ public final class EventLogGui implements Listener {
         return m + "m " + s + "s";
     }
 
-    private static String formatWall(long unix) {
+    private static final DateTimeFormatter WALL_FMT = DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.US);
+
+    private static String formatWall(long unix, ZoneId zone) {
         if (unix <= 0) return "?";
-        return new SimpleDateFormat("MMM d, h:mm a").format(new Date(unix * 1000L));
+        return WALL_FMT.withZone(zone).format(Instant.ofEpochSecond(unix));
     }
 
     /** "ENTITY_ATTACK" -> "Entity Attack" */
@@ -421,11 +426,15 @@ public final class EventLogGui implements Listener {
         final UUID viewerUuid;
         final String matchId;
         final int page;
+        final int detailsPage;
+        final ReturnTarget origin;
 
-        EventLogHolder(UUID viewerUuid, String matchId, int page) {
-            this.viewerUuid = viewerUuid;
-            this.matchId    = matchId;
-            this.page       = page;
+        EventLogHolder(UUID viewerUuid, String matchId, int page, int detailsPage, ReturnTarget origin) {
+            this.viewerUuid  = viewerUuid;
+            this.matchId     = matchId;
+            this.page        = page;
+            this.detailsPage = detailsPage;
+            this.origin      = origin;
         }
 
         @Override public Inventory getInventory() { return null; }

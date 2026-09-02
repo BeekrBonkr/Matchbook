@@ -3,6 +3,12 @@
 A Paper plugin that records persistent match history for [MBedwars](https://www.spigotmc.org/resources/mbedwars.82729/). Browse past matches in-game, export stats to CSV, and view a full event-by-event match timeline.
 
 ---
+<div align="center">
+
+<a href="https://ko-fi.com/bkrbnkr"><img alt="Support me on Ko-fi" src="https://img.shields.io/badge/Ko--fi-buy_me_a_coffee-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white"></a>
+
+</div>
+---
 
 ## Features
 
